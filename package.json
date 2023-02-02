@@ -1,5 +1,5 @@
 {
-  "name": "tiny-http-native",
+  "name": "@pearjs/http",
   "version": "1.0.2",
   "description": "Tiny HTTP library made purely on libuv and napi",
   "main": "index.js",
@@ -7,7 +7,6 @@
     "b4a": "^1.6.1",
     "events": "^3.3.0",
     "napi-macros": "^2.1.0",
-    "node-gyp-build": "^4.5.0",
     "streamx": "^2.13.0"
   },
   "devDependencies": {
@@ -21,13 +20,12 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/holepunchto/tiny-http-native.git"
+    "url": "https://github.com/holepunchto/pearjs-http.git"
   },
   "author": "Mathias Buus (@mafintosh)",
   "license": "MIT",
-  "gypfile": true,
   "bugs": {
-    "url": "https://github.com/holepunchto/tiny-http-native/issues"
+    "url": "https://github.com/holepunchto/pearjs-http/issues"
   },
-  "homepage": "https://github.com/holepunchto/tiny-http-native"
+  "homepage": "https://github.com/holepunchto/pearjs-http#readme"
 }

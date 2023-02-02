@@ -66,19 +66,19 @@ class Socket extends stream.Writable {
   constructor (server, id) {
     super()
 
-    const buf = b4a.alloc(binding.sizeof_tiny_http_connection_t + binding.sizeof_uv_write_t + binding.sizeof_uv_shutdown_t)
+    const buf = b4a.alloc(binding.sizeof_pear_http_connection_t + binding.sizeof_uv_write_t + binding.sizeof_uv_shutdown_t)
     let pos = 0
 
     this.id = id
     this.server = server
 
-    this.handle = buf.subarray(0, pos += binding.sizeof_tiny_http_connection_t)
+    this.handle = buf.subarray(0, pos += binding.sizeof_pear_http_connection_t)
     this.writeRequest = buf.subarray(pos, pos += binding.sizeof_uv_write_t)
     this.shutdownRequest = buf.subarray(pos, pos += binding.sizeof_uv_shutdown_t)
 
     this.callback = null
 
-    this.view = new Uint32Array(this.handle.buffer, this.handle.byteOffset + binding.offsetof_tiny_http_connection_t_id, 1)
+    this.view = new Uint32Array(this.handle.buffer, this.handle.byteOffset + binding.offsetof_pear_http_connection_t_id, 1)
     this.view[0] = id
 
     this.buffer = null
@@ -87,18 +87,18 @@ class Socket extends stream.Writable {
 
   _writev (datas, callback) {
     this.callback = callback
-    binding.tiny_http_connection_write(this.handle, this.writeRequest, datas)
+    binding.pear_http_connection_write(this.handle, this.writeRequest, datas)
   }
 
   _final (callback) {
     this.callback = callback
-    binding.tiny_http_connection_shutdown(this.handle, this.shutdownRequest)
+    binding.pear_http_connection_shutdown(this.handle, this.shutdownRequest)
   }
 
   _destroy (callback) {
     for (const req of this.requests) req.destroy()
     this.callback = callback
-    binding.tiny_http_connection_close(this.handle)
+    binding.pear_http_connection_close(this.handle)
   }
 
   oncallback (status) {
@@ -169,14 +169,14 @@ module.exports = class Server extends EventEmitter {
     super()
 
     this.buffer = b4a.allocUnsafe(65536)
-    this.handle = b4a.alloc(binding.sizeof_tiny_http_t)
+    this.handle = b4a.alloc(binding.sizeof_pear_http_t)
     this.host = null
     this.port = 0
     this.closing = false
 
     this.connections = []
 
-    binding.tiny_http_init(this.handle, this.buffer, this,
+    binding.pear_http_init(this.handle, this.buffer, this,
       this._onconnection,
       this._onread,
       this._onwrite,
@@ -197,7 +197,7 @@ module.exports = class Server extends EventEmitter {
     c.on('close', () => {
       const last = this.connections.pop()
       if (last !== c) this.connections[last.view[0] = last.id = c.id] = last
-      else if (this.closing && this.connections.length === 0) binding.tiny_http_close(this.handle)
+      else if (this.closing && this.connections.length === 0) binding.pear_http_close(this.handle)
     })
 
     this.emit('connection', c)
@@ -239,7 +239,7 @@ module.exports = class Server extends EventEmitter {
     if (onclose) this.once('close', onclose)
     if (this.closing) return
     this.closing = true
-    if (this.connections.length === 0) binding.tiny_http_close(this.handle)
+    if (this.connections.length === 0) binding.pear_http_close(this.handle)
   }
 
   address () {
@@ -260,7 +260,7 @@ module.exports = class Server extends EventEmitter {
     if (!host) host = '0.0.0.0'
 
     try {
-      this.port = binding.tiny_http_bind(this.handle, port, host)
+      this.port = binding.pear_http_bind(this.handle, port, host)
       this.host = host
     } catch (err) {
       queueMicrotask(() => {

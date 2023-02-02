@@ -1,9 +1,9 @@
-# tiny-http-native
+# @pearjs/http
 
 Tiny HTTP library made purely on libuv and napi.
 
 ```
-npm install tiny-http-native
+npm install @pearjs/http
 ```
 
 Useful for embedded devices that only have n-api but not node.
@@ -15,7 +15,7 @@ and streaming server responses.
 ## Usage
 
 ``` js
-const http = require('tiny-http-native')
+const http = require('@pearjs/http')
 
 // same api as node
 

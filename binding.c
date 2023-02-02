@@ -7,13 +7,13 @@
 #include <winsock.h>
 #endif
 
-#define TINY_HTTP_THROW(err) \
+#define PEAR_HTTP_THROW(err) \
   { \
     napi_throw_error(env, uv_err_name(err), uv_strerror(err)); \
     return NULL; \
   }
 
-#define TINY_HTTP_CALLBACK(self, fn, src) \
+#define PEAR_HTTP_CALLBACK(self, fn, src) \
   napi_env env = self->env; \
   napi_handle_scope scope; \
   napi_open_handle_scope(env, &scope); \
@@ -37,18 +37,18 @@ typedef struct {
 
   char *read_buf;
   size_t read_buf_len;
-} tiny_http_t;
+} pear_http_t;
 
 typedef struct {
   uv_tcp_t tcp;
-  tiny_http_t *server;
+  pear_http_t *server;
   uint32_t id;
-} tiny_http_connection_t;
+} pear_http_connection_t;
 
 static void
 alloc_buffer (uv_handle_t *handle, size_t suggested_size, uv_buf_t *buf) {
-  tiny_http_connection_t *c = (tiny_http_connection_t *) handle;
-  tiny_http_t *self = c->server;
+  pear_http_connection_t *c = (pear_http_connection_t *) handle;
+  pear_http_t *self = c->server;
 
   buf->base = self->read_buf;
   buf->len = self->read_buf_len;
@@ -56,10 +56,10 @@ alloc_buffer (uv_handle_t *handle, size_t suggested_size, uv_buf_t *buf) {
 
 static void
 on_connection_close (uv_handle_t *handle) {
-  tiny_http_connection_t *c = (tiny_http_connection_t *) handle;
-  tiny_http_t *self = c->server;
+  pear_http_connection_t *c = (pear_http_connection_t *) handle;
+  pear_http_t *self = c->server;
 
-  TINY_HTTP_CALLBACK(self, self->on_close, {
+  PEAR_HTTP_CALLBACK(self, self->on_close, {
     napi_value argv[1];
 
     napi_create_uint32(env, c->id, &(argv[0]));
@@ -74,9 +74,9 @@ on_connection_close (uv_handle_t *handle) {
 
 static void
 on_server_close (uv_handle_t *handle) {
-  tiny_http_t *self = (tiny_http_t *) handle;
+  pear_http_t *self = (pear_http_t *) handle;
 
-  TINY_HTTP_CALLBACK(self, self->on_server_close, {
+  PEAR_HTTP_CALLBACK(self, self->on_server_close, {
     if (napi_make_callback(env, NULL, ctx, callback, 0, NULL, NULL) == napi_pending_exception) {
       napi_value fatal_exception;
       napi_get_and_clear_last_exception(env, &fatal_exception);
@@ -95,10 +95,10 @@ on_server_close (uv_handle_t *handle) {
 
 static void
 on_write (uv_write_t *req, int status) {
-  tiny_http_connection_t *c = (tiny_http_connection_t *) req->data;
-  tiny_http_t *self = c->server;
+  pear_http_connection_t *c = (pear_http_connection_t *) req->data;
+  pear_http_t *self = c->server;
 
-  TINY_HTTP_CALLBACK(self, self->on_write, {
+  PEAR_HTTP_CALLBACK(self, self->on_write, {
     napi_value argv[2];
 
     napi_create_uint32(env, c->id, &(argv[0]));
@@ -114,10 +114,10 @@ on_write (uv_write_t *req, int status) {
 
 static void
 on_shutdown (uv_shutdown_t *req, int status) {
-  tiny_http_connection_t *c = (tiny_http_connection_t *) req->data;
-  tiny_http_t *self = c->server;
+  pear_http_connection_t *c = (pear_http_connection_t *) req->data;
+  pear_http_t *self = c->server;
 
-  TINY_HTTP_CALLBACK(self, self->on_write, {
+  PEAR_HTTP_CALLBACK(self, self->on_write, {
     napi_value argv[2];
 
     napi_create_uint32(env, c->id, &(argv[0]));
@@ -133,12 +133,12 @@ on_shutdown (uv_shutdown_t *req, int status) {
 
 static void
 on_read (uv_stream_t *client, ssize_t nread, const uv_buf_t *buf) {
-  tiny_http_connection_t *c = (tiny_http_connection_t *) client;
-  tiny_http_t *self = (tiny_http_t *) c->server;
+  pear_http_connection_t *c = (pear_http_connection_t *) client;
+  pear_http_t *self = (pear_http_t *) c->server;
 
   if (nread == 0) return;
 
-  TINY_HTTP_CALLBACK(self, self->on_read, {
+  PEAR_HTTP_CALLBACK(self, self->on_read, {
     napi_value argv[2];
 
     napi_create_uint32(env, c->id, &(argv[0]));
@@ -156,12 +156,12 @@ static void
 on_new_connection (uv_stream_t *server, int status) {
   if (status < 0) return; // TODO: mb bubble up?
 
-  tiny_http_t *self = (tiny_http_t *) server;
+  pear_http_t *self = (pear_http_t *) server;
 
   uv_loop_t *loop;
   napi_get_uv_event_loop(self->env, &loop);
 
-  TINY_HTTP_CALLBACK(self, self->on_connection, {
+  PEAR_HTTP_CALLBACK(self, self->on_connection, {
     napi_value res;
 
     if (napi_make_callback(env, NULL, ctx, callback, 0, NULL, &res) == napi_pending_exception) {
@@ -169,7 +169,7 @@ on_new_connection (uv_stream_t *server, int status) {
       napi_get_and_clear_last_exception(env, &fatal_exception);
       napi_fatal_exception(env, fatal_exception);
     } else {
-      tiny_http_connection_t *client;
+      pear_http_connection_t *client;
       size_t client_size;
 
       napi_get_buffer_info(env, res, (void **) &client, &client_size);
@@ -186,9 +186,9 @@ on_new_connection (uv_stream_t *server, int status) {
   })
 }
 
-NAPI_METHOD(tiny_http_init) {
+NAPI_METHOD(pear_http_init) {
   NAPI_ARGV(8)
-  NAPI_ARGV_BUFFER_CAST(tiny_http_t *, self, 0)
+  NAPI_ARGV_BUFFER_CAST(pear_http_t *, self, 0)
   NAPI_ARGV_BUFFER(read_buf, 1)
 
   self->env = env;
@@ -211,9 +211,9 @@ NAPI_METHOD(tiny_http_init) {
   return NULL;
 }
 
-NAPI_METHOD(tiny_http_bind) {
+NAPI_METHOD(pear_http_bind) {
   NAPI_ARGV(3)
-  NAPI_ARGV_BUFFER_CAST(tiny_http_t *, self, 0)
+  NAPI_ARGV_BUFFER_CAST(pear_http_t *, self, 0)
   NAPI_ARGV_UINT32(port, 1)
   NAPI_ARGV_UTF8(ip, 17, 2)
 
@@ -222,15 +222,15 @@ NAPI_METHOD(tiny_http_bind) {
   struct sockaddr_storage addr;
   int addr_len = sizeof(struct sockaddr_in);
   err = uv_ip4_addr(ip, port, (struct sockaddr_in *) &addr);
-  if (err < 0) TINY_HTTP_THROW(err)
+  if (err < 0) PEAR_HTTP_THROW(err)
 
   err = uv_tcp_bind(&(self->tcp), (struct sockaddr *) &addr, 0);
-  if (err < 0) TINY_HTTP_THROW(err)
+  if (err < 0) PEAR_HTTP_THROW(err)
 
   struct sockaddr_storage name;
 
   err = uv_tcp_getsockname(&(self->tcp), (struct sockaddr *) &name, &addr_len);
-  if (err < 0) TINY_HTTP_THROW(err)
+  if (err < 0) PEAR_HTTP_THROW(err)
 
   int local_port = ntohs(((struct sockaddr_in *) &name)->sin_port);
 
@@ -239,18 +239,18 @@ NAPI_METHOD(tiny_http_bind) {
   NAPI_RETURN_UINT32(local_port)
 }
 
-NAPI_METHOD(tiny_http_close) {
+NAPI_METHOD(pear_http_close) {
   NAPI_ARGV(1)
-  NAPI_ARGV_BUFFER_CAST(tiny_http_t *, self, 0)
+  NAPI_ARGV_BUFFER_CAST(pear_http_t *, self, 0)
 
   uv_close((uv_handle_t *) self, on_server_close);
 
   return NULL;
 }
 
-NAPI_METHOD(tiny_http_connection_write) {
+NAPI_METHOD(pear_http_connection_write) {
   NAPI_ARGV(3)
-  NAPI_ARGV_BUFFER_CAST(tiny_http_connection_t *, c, 0)
+  NAPI_ARGV_BUFFER_CAST(pear_http_connection_t *, c, 0)
   NAPI_ARGV_BUFFER_CAST(uv_write_t *, req, 1)
 
   napi_value arr = argv[2];
@@ -275,9 +275,9 @@ NAPI_METHOD(tiny_http_connection_write) {
   return NULL;
 }
 
-NAPI_METHOD(tiny_http_connection_shutdown) {
+NAPI_METHOD(pear_http_connection_shutdown) {
   NAPI_ARGV(2)
-  NAPI_ARGV_BUFFER_CAST(tiny_http_connection_t *, c, 0)
+  NAPI_ARGV_BUFFER_CAST(pear_http_connection_t *, c, 0)
   NAPI_ARGV_BUFFER_CAST(uv_shutdown_t *, req, 1)
 
   req->data = c;
@@ -286,9 +286,9 @@ NAPI_METHOD(tiny_http_connection_shutdown) {
   return NULL;
 }
 
-NAPI_METHOD(tiny_http_connection_close) {
+NAPI_METHOD(pear_http_connection_close) {
   NAPI_ARGV(1)
-  NAPI_ARGV_BUFFER_CAST(tiny_http_connection_t *, c, 0)
+  NAPI_ARGV_BUFFER_CAST(pear_http_connection_t *, c, 0)
 
   uv_close((uv_handle_t *) c, on_connection_close);
 
@@ -296,15 +296,15 @@ NAPI_METHOD(tiny_http_connection_close) {
 }
 
 NAPI_INIT() {
-  NAPI_EXPORT_SIZEOF(tiny_http_t)
-  NAPI_EXPORT_SIZEOF(tiny_http_connection_t)
+  NAPI_EXPORT_SIZEOF(pear_http_t)
+  NAPI_EXPORT_SIZEOF(pear_http_connection_t)
   NAPI_EXPORT_SIZEOF(uv_write_t)
   NAPI_EXPORT_SIZEOF(uv_shutdown_t)
-  NAPI_EXPORT_OFFSETOF(tiny_http_connection_t, id)
-  NAPI_EXPORT_FUNCTION(tiny_http_init)
-  NAPI_EXPORT_FUNCTION(tiny_http_bind)
-  NAPI_EXPORT_FUNCTION(tiny_http_close)
-  NAPI_EXPORT_FUNCTION(tiny_http_connection_write)
-  NAPI_EXPORT_FUNCTION(tiny_http_connection_shutdown)
-  NAPI_EXPORT_FUNCTION(tiny_http_connection_close)
+  NAPI_EXPORT_OFFSETOF(pear_http_connection_t, id)
+  NAPI_EXPORT_FUNCTION(pear_http_init)
+  NAPI_EXPORT_FUNCTION(pear_http_bind)
+  NAPI_EXPORT_FUNCTION(pear_http_close)
+  NAPI_EXPORT_FUNCTION(pear_http_connection_write)
+  NAPI_EXPORT_FUNCTION(pear_http_connection_shutdown)
+  NAPI_EXPORT_FUNCTION(pear_http_connection_close)
 }
