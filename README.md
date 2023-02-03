@@ -1,23 +1,19 @@
 # @pearjs/http
 
-Tiny HTTP library made purely on libuv and napi.
+Native HTTP library for JavaScript.
 
 ```
 npm install @pearjs/http
 ```
 
-Useful for embedded devices that only have n-api but not node.
-
-Only HTTP servers at the moment and current does NOT support server request bodies,
-but supports most other HTTP features (keep-alive, chunked encoding etc)
-and streaming server responses.
+Only HTTP servers at the moment and current does NOT support server request bodies, but supports most other HTTP features (keep-alive, chunked encoding etc) and streaming server responses.
 
 ## Usage
 
 ``` js
 const http = require('@pearjs/http')
 
-// same api as node
+// Same API as Node.js
 
 const server = http.createServer(function (req, res) {
   res.statusCode = 200
