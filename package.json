@@ -1,6 +1,6 @@
 {
   "name": "@pearjs/http",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "description": "Native HTTP library for JavaScript",
   "main": "index.js",
   "files": [
