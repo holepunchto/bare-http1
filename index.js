@@ -1,6 +1,6 @@
 const stream = require('streamx')
 const b4a = require('b4a')
-const { EventEmitter } = require('@pearjs/events')
+const { EventEmitter } = require('events')
 const binding = require('./binding')
 
 const STATUS_CODES = new Map([
