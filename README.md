@@ -29,4 +29,4 @@ server.listen(0, function () {
 
 ## License
 
-MIT
+Apache-2.0
