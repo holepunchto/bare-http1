@@ -1,6 +1,5 @@
 const EventEmitter = require('events')
 const stream = require('streamx')
-const b4a = require('b4a')
 const binding = require('./binding')
 
 const STATUS_CODES = new Map([
@@ -66,39 +65,40 @@ class Socket extends stream.Writable {
   constructor (server, id) {
     super()
 
-    const buf = b4a.alloc(binding.sizeof_pear_http_connection_t + binding.sizeof_uv_write_t + binding.sizeof_uv_shutdown_t)
-    let pos = 0
+    const buf = Buffer.alloc(binding.sizeofConnection + binding.sizeofWrite + binding.sizeofShutdown)
 
     this.id = id
     this.server = server
 
-    this.handle = buf.subarray(0, pos += binding.sizeof_pear_http_connection_t)
-    this.writeRequest = buf.subarray(pos, pos += binding.sizeof_uv_write_t)
-    this.shutdownRequest = buf.subarray(pos, pos += binding.sizeof_uv_shutdown_t)
+    let pos = 0
+
+    this.handle = buf.subarray(pos, pos += binding.sizeofConnection)
+    this.writeRequest = buf.subarray(pos, pos += binding.sizeofWrite)
+    this.shutdownRequest = buf.subarray(pos, pos += binding.sizeofShutdown)
 
     this.callback = null
 
-    this.view = new Uint32Array(this.handle.buffer, this.handle.byteOffset + binding.offsetof_pear_http_connection_t_id, 1)
+    this.view = new Uint32Array(this.handle.buffer, this.handle.byteOffset + binding.offsetofConnectionID, 1)
     this.view[0] = id
 
     this.buffer = null
     this.requests = new Set()
   }
 
-  _writev (datas, callback) {
+  _writev (data, callback) {
     this.callback = callback
-    binding.pear_http_connection_write(this.handle, this.writeRequest, datas)
+    binding.connectionWrite(this.handle, this.writeRequest, data)
   }
 
   _final (callback) {
     this.callback = callback
-    binding.pear_http_connection_shutdown(this.handle, this.shutdownRequest)
+    binding.connectionShutdown(this.handle, this.shutdownRequest)
   }
 
   _destroy (callback) {
     for (const req of this.requests) req.destroy()
     this.callback = callback
-    binding.pear_http_connection_close(this.handle)
+    binding.connectionClose(this.handle)
   }
 
   oncallback (status) {
@@ -110,7 +110,7 @@ class Socket extends stream.Writable {
 
   ondata (data) {
     if (this.buffer !== null) {
-      this.buffer = b4a.concat([this.buffer, data])
+      this.buffer = Buffer.concat([this.buffer, data])
     } else {
       this.buffer = data
     }
@@ -141,7 +141,7 @@ class Socket extends stream.Writable {
   }
 
   onrequest (head) {
-    const r = b4a.toString(head).trim().split('\r\n')
+    const r = Buffer.coerce(head).toString().trim().split('\r\n')
 
     if (r.length === 0) return this.destroy()
 
@@ -168,15 +168,15 @@ module.exports = class Server extends EventEmitter {
   constructor (onrequest) {
     super()
 
-    this.buffer = b4a.allocUnsafe(65536)
-    this.handle = b4a.alloc(binding.sizeof_pear_http_t)
+    this.handle = Buffer.alloc(binding.sizeofServer)
+    this.buffer = Buffer.allocUnsafe(65536)
     this.host = null
     this.port = 0
     this.closing = false
 
     this.connections = []
 
-    binding.pear_http_init(this.handle, this.buffer, this,
+    binding.init(this.handle, this.buffer, this,
       this._onconnection,
       this._onread,
       this._onwrite,
@@ -197,7 +197,7 @@ module.exports = class Server extends EventEmitter {
     c.on('close', () => {
       const last = this.connections.pop()
       if (last !== c) this.connections[last.view[0] = last.id = c.id] = last
-      else if (this.closing && this.connections.length === 0) binding.pear_http_close(this.handle)
+      else if (this.closing && this.connections.length === 0) binding.close(this.handle)
     })
 
     this.emit('connection', c)
@@ -239,13 +239,13 @@ module.exports = class Server extends EventEmitter {
     if (onclose) this.once('close', onclose)
     if (this.closing) return
     this.closing = true
-    if (this.connections.length === 0) binding.pear_http_close(this.handle)
+    if (this.connections.length === 0) binding.close(this.handle)
   }
 
   address () {
     if (!this.host) throw new Error('Server is not bound')
 
-    return { address: this.host, family: 'IPv4', port: this.port }
+    return { address: this.host, family: 4, port: this.port }
   }
 
   listen (port, host, onlistening) {
@@ -260,7 +260,7 @@ module.exports = class Server extends EventEmitter {
     if (!host) host = '0.0.0.0'
 
     try {
-      this.port = binding.pear_http_bind(this.handle, port, host)
+      this.port = binding.bind(this.handle, port, host)
       this.host = host
     } catch (err) {
       queueMicrotask(() => {
@@ -338,13 +338,13 @@ class Response extends stream.Writable {
     if (this.headersFlushed === false) this.flushHeaders()
     if (this.onlyHeaders === true) return callback(null)
 
-    if (typeof data === 'string') data = b4a.from(data)
+    if (typeof data === 'string') data = Buffer.from(data)
 
     if (this.chunked) {
-      data = b4a.concat([
-        b4a.from('' + data.byteLength.toString(16) + '\r\n'),
+      data = Buffer.concat([
+        Buffer.from('' + data.byteLength.toString(16) + '\r\n'),
         data,
-        b4a.from('\r\n')
+        Buffer.from('\r\n')
       ])
     }
 
@@ -359,7 +359,7 @@ class Response extends stream.Writable {
   _final (callback) {
     if (this.headersFlushed === false) this.flushHeaders()
 
-    if (this.chunked && this.onlyHeaders === false) this.socket.write(b4a.from('0\r\n\r\n'))
+    if (this.chunked && this.onlyHeaders === false) this.socket.write(Buffer.from('0\r\n\r\n'))
     if (this.close) this.socket.end()
 
     callback(null)
@@ -389,7 +389,7 @@ class Response extends stream.Writable {
     if (this.chunked) h += 'Transfer-Encoding: chunked\r\n'
     h += '\r\n'
 
-    this.socket.write(b4a.from(h))
+    this.socket.write(Buffer.from(h))
     this.headersFlushed = true
   }
 }

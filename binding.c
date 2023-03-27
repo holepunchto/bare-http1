@@ -1,54 +1,32 @@
-#include <napi-macros.h>
-#include <node_api.h>
+#include <assert.h>
+#include <js.h>
+#include <pear.h>
 #include <stdlib.h>
 #include <uv.h>
 
-#ifdef _WIN32
-#include <winsock.h>
-#endif
-
-#define PEAR_HTTP_THROW(err) \
-  { \
-    napi_throw_error(env, uv_err_name(err), uv_strerror(err)); \
-    return NULL; \
-  }
-
-#define PEAR_HTTP_CALLBACK(self, fn, src) \
-  napi_env env = self->env; \
-  napi_handle_scope scope; \
-  napi_open_handle_scope(env, &scope); \
-  napi_value ctx; \
-  napi_get_reference_value(env, self->ctx, &ctx); \
-  napi_value callback; \
-  napi_get_reference_value(env, fn, &callback); \
-  src \
-    napi_close_handle_scope(env, scope);
-
 typedef struct {
   uv_tcp_t tcp;
-
-  napi_env env;
-  napi_ref ctx;
-  napi_ref on_connection;
-  napi_ref on_read;
-  napi_ref on_write;
-  napi_ref on_close;
-  napi_ref on_server_close;
-
+  js_env_t *env;
+  js_ref_t *ctx;
+  js_ref_t *on_connection;
+  js_ref_t *on_read;
+  js_ref_t *on_write;
+  js_ref_t *on_close;
+  js_ref_t *on_server_close;
   char *read_buf;
   size_t read_buf_len;
-} pear_http_t;
+} pear_http_server_t;
 
 typedef struct {
   uv_tcp_t tcp;
-  pear_http_t *server;
+  pear_http_server_t *server;
   uint32_t id;
 } pear_http_connection_t;
 
 static void
 alloc_buffer (uv_handle_t *handle, size_t suggested_size, uv_buf_t *buf) {
-  pear_http_connection_t *c = (pear_http_connection_t *) handle;
-  pear_http_t *self = c->server;
+  pear_http_connection_t *conn = (pear_http_connection_t *) handle;
+  pear_http_server_t *self = conn->server;
 
   buf->base = self->read_buf;
   buf->len = self->read_buf_len;
@@ -56,255 +34,488 @@ alloc_buffer (uv_handle_t *handle, size_t suggested_size, uv_buf_t *buf) {
 
 static void
 on_connection_close (uv_handle_t *handle) {
-  pear_http_connection_t *c = (pear_http_connection_t *) handle;
-  pear_http_t *self = c->server;
+  pear_http_connection_t *conn = (pear_http_connection_t *) handle;
+  pear_http_server_t *self = conn->server;
 
-  PEAR_HTTP_CALLBACK(self, self->on_close, {
-    napi_value argv[1];
+  int err;
 
-    napi_create_uint32(env, c->id, &(argv[0]));
+  js_env_t *env = self->env;
 
-    if (napi_make_callback(env, NULL, ctx, callback, 1, argv, NULL) == napi_pending_exception) {
-      napi_value fatal_exception;
-      napi_get_and_clear_last_exception(env, &fatal_exception);
-      napi_fatal_exception(env, fatal_exception);
-    }
-  })
+  js_value_t *ctx;
+  err = js_get_reference_value(env, self->ctx, &ctx);
+  assert(err == 0);
+
+  js_value_t *on_close;
+  err = js_get_reference_value(env, self->on_close, &on_close);
+  assert(err == 0);
+
+  js_value_t *argv[1];
+
+  err = js_create_uint32(env, conn->id, &argv[0]);
+  assert(err == 0);
+
+  js_call_function(env, ctx, on_close, 1, argv, NULL);
 }
 
 static void
 on_server_close (uv_handle_t *handle) {
-  pear_http_t *self = (pear_http_t *) handle;
+  pear_http_server_t *self = (pear_http_server_t *) handle;
 
-  PEAR_HTTP_CALLBACK(self, self->on_server_close, {
-    if (napi_make_callback(env, NULL, ctx, callback, 0, NULL, NULL) == napi_pending_exception) {
-      napi_value fatal_exception;
-      napi_get_and_clear_last_exception(env, &fatal_exception);
-      napi_fatal_exception(env, fatal_exception);
-    }
+  int err;
 
-    napi_delete_reference(env, self->on_connection);
-    napi_delete_reference(env, self->on_read);
-    napi_delete_reference(env, self->on_write);
-    napi_delete_reference(env, self->on_close);
-    napi_delete_reference(env, self->on_server_close);
+  js_env_t *env = self->env;
 
-    napi_delete_reference(env, self->ctx);
-  })
+  js_value_t *ctx;
+  err = js_get_reference_value(env, self->ctx, &ctx);
+  assert(err == 0);
+
+  js_value_t *on_server_close;
+  err = js_get_reference_value(env, self->on_server_close, &on_server_close);
+  assert(err == 0);
+
+  js_call_function(env, ctx, on_server_close, 0, NULL, NULL);
+
+  err = js_delete_reference(env, self->on_connection);
+  assert(err == 0);
+
+  err = js_delete_reference(env, self->on_read);
+  assert(err == 0);
+
+  err = js_delete_reference(env, self->on_write);
+  assert(err == 0);
+
+  err = js_delete_reference(env, self->on_close);
+  assert(err == 0);
+
+  err = js_delete_reference(env, self->on_server_close);
+  assert(err == 0);
+
+  err = js_delete_reference(env, self->ctx);
+  assert(err == 0);
 }
 
 static void
 on_write (uv_write_t *req, int status) {
-  pear_http_connection_t *c = (pear_http_connection_t *) req->data;
-  pear_http_t *self = c->server;
+  pear_http_connection_t *conn = (pear_http_connection_t *) req->data;
+  pear_http_server_t *self = conn->server;
 
-  PEAR_HTTP_CALLBACK(self, self->on_write, {
-    napi_value argv[2];
+  int err;
 
-    napi_create_uint32(env, c->id, &(argv[0]));
-    napi_create_int32(env, status, &(argv[1]));
+  js_env_t *env = self->env;
 
-    if (napi_make_callback(env, NULL, ctx, callback, 2, argv, NULL) == napi_pending_exception) {
-      napi_value fatal_exception;
-      napi_get_and_clear_last_exception(env, &fatal_exception);
-      napi_fatal_exception(env, fatal_exception);
-    }
-  })
+  js_value_t *ctx;
+  err = js_get_reference_value(env, self->ctx, &ctx);
+  assert(err == 0);
+
+  js_value_t *on_write;
+  err = js_get_reference_value(env, self->on_write, &on_write);
+  assert(err == 0);
+
+  js_value_t *argv[2];
+
+  err = js_create_uint32(env, conn->id, &argv[0]);
+  assert(err == 0);
+
+  err = js_create_int32(env, status, &argv[1]);
+  assert(err == 0);
+
+  js_call_function(env, ctx, on_write, 2, argv, NULL);
 }
 
 static void
 on_shutdown (uv_shutdown_t *req, int status) {
-  pear_http_connection_t *c = (pear_http_connection_t *) req->data;
-  pear_http_t *self = c->server;
+  pear_http_connection_t *conn = (pear_http_connection_t *) req->data;
+  pear_http_server_t *self = conn->server;
 
-  PEAR_HTTP_CALLBACK(self, self->on_write, {
-    napi_value argv[2];
+  int err;
 
-    napi_create_uint32(env, c->id, &(argv[0]));
-    napi_create_int32(env, status, &(argv[1]));
+  js_env_t *env = self->env;
 
-    if (napi_make_callback(env, NULL, ctx, callback, 2, argv, NULL) == napi_pending_exception) {
-      napi_value fatal_exception;
-      napi_get_and_clear_last_exception(env, &fatal_exception);
-      napi_fatal_exception(env, fatal_exception);
-    }
-  })
+  js_value_t *ctx;
+  err = js_get_reference_value(env, self->ctx, &ctx);
+  assert(err == 0);
+
+  js_value_t *on_write;
+  err = js_get_reference_value(env, self->on_write, &on_write);
+  assert(err == 0);
+
+  js_value_t *argv[2];
+
+  err = js_create_uint32(env, conn->id, &argv[0]);
+  assert(err == 0);
+
+  err = js_create_int32(env, status, &argv[1]);
+  assert(err == 0);
+
+  js_call_function(env, ctx, on_write, 2, argv, NULL);
 }
 
 static void
 on_read (uv_stream_t *client, ssize_t nread, const uv_buf_t *buf) {
-  pear_http_connection_t *c = (pear_http_connection_t *) client;
-  pear_http_t *self = (pear_http_t *) c->server;
+  pear_http_connection_t *conn = (pear_http_connection_t *) client;
+  pear_http_server_t *self = (pear_http_server_t *) conn->server;
 
   if (nread == 0) return;
 
-  PEAR_HTTP_CALLBACK(self, self->on_read, {
-    napi_value argv[2];
+  int err;
 
-    napi_create_uint32(env, c->id, &(argv[0]));
-    napi_create_int32(env, nread == UV_EOF ? 0 : (int) nread, &(argv[1]));
+  js_env_t *env = self->env;
 
-    if (napi_make_callback(env, NULL, ctx, callback, 2, argv, NULL) == napi_pending_exception) {
-      napi_value fatal_exception;
-      napi_get_and_clear_last_exception(env, &fatal_exception);
-      napi_fatal_exception(env, fatal_exception);
-    }
-  })
+  js_value_t *ctx;
+  err = js_get_reference_value(env, self->ctx, &ctx);
+  assert(err == 0);
+
+  js_value_t *on_read;
+  err = js_get_reference_value(env, self->on_read, &on_read);
+  assert(err == 0);
+
+  js_value_t *argv[2];
+
+  err = js_create_uint32(env, conn->id, &argv[0]);
+  assert(err == 0);
+
+  err = js_create_int32(env, nread == UV_EOF ? 0 : (int32_t) nread, &argv[1]);
+  assert(err == 0);
+
+  js_call_function(env, ctx, on_read, 2, argv, NULL);
 }
 
 static void
 on_new_connection (uv_stream_t *server, int status) {
   if (status < 0) return; // TODO: mb bubble up?
 
-  pear_http_t *self = (pear_http_t *) server;
+  pear_http_server_t *self = (pear_http_server_t *) server;
 
   uv_loop_t *loop;
-  napi_get_uv_event_loop(self->env, &loop);
+  js_get_env_loop(self->env, &loop);
 
-  PEAR_HTTP_CALLBACK(self, self->on_connection, {
-    napi_value res;
+  int err;
 
-    if (napi_make_callback(env, NULL, ctx, callback, 0, NULL, &res) == napi_pending_exception) {
-      napi_value fatal_exception;
-      napi_get_and_clear_last_exception(env, &fatal_exception);
-      napi_fatal_exception(env, fatal_exception);
-    } else {
-      pear_http_connection_t *client;
-      size_t client_size;
+  js_env_t *env = self->env;
 
-      napi_get_buffer_info(env, res, (void **) &client, &client_size);
+  js_value_t *ctx;
+  err = js_get_reference_value(env, self->ctx, &ctx);
+  assert(err == 0);
 
-      uv_tcp_init(loop, (uv_tcp_t *) client);
-      client->server = self;
+  js_value_t *on_connection;
+  err = js_get_reference_value(env, self->on_connection, &on_connection);
+  assert(err == 0);
 
-      if (uv_accept(server, (uv_stream_t *) client) == 0) {
-        uv_read_start((uv_stream_t *) client, alloc_buffer, on_read);
-      } else {
-        uv_close((uv_handle_t *) client, on_connection_close);
-      }
-    }
-  })
+  js_value_t *res;
+
+  err = js_call_function(env, ctx, on_connection, 0, NULL, &res);
+  if (err < 0) return;
+
+  pear_http_connection_t *client;
+  size_t client_size;
+
+  err = js_get_typedarray_info(env, res, NULL, (void **) &client, &client_size, NULL, NULL);
+  assert(err == 0);
+
+  err = uv_tcp_init(loop, (uv_tcp_t *) client);
+  assert(err == 0);
+
+  client->server = self;
+
+  if (uv_accept(server, (uv_stream_t *) client) == 0) {
+    uv_read_start((uv_stream_t *) client, alloc_buffer, on_read);
+  } else {
+    uv_close((uv_handle_t *) client, on_connection_close);
+  }
 }
 
-NAPI_METHOD(pear_http_init) {
-  NAPI_ARGV(8)
-  NAPI_ARGV_BUFFER_CAST(pear_http_t *, self, 0)
-  NAPI_ARGV_BUFFER(read_buf, 1)
+static js_value_t *
+pear_http_init (js_env_t *env, js_callback_info_t *info) {
+  int err;
+
+  size_t argc = 8;
+  js_value_t *argv[8];
+
+  err = js_get_callback_info(env, info, &argc, argv, NULL, NULL);
+  assert(err == 0);
+
+  assert(argc == 8);
+
+  pear_http_server_t *self;
+  err = js_get_typedarray_info(env, argv[0], NULL, (void **) &self, NULL, NULL, NULL);
+  assert(err == 0);
+
+  size_t read_buf_len;
+  void *read_buf;
+  err = js_get_typedarray_info(env, argv[1], NULL, &read_buf, &read_buf_len, NULL, NULL);
+  assert(err == 0);
 
   self->env = env;
-
-  uv_loop_t *loop;
-  napi_get_uv_event_loop(env, &loop);
-
-  uv_tcp_init(loop, &(self->tcp));
-
   self->read_buf = read_buf;
   self->read_buf_len = read_buf_len;
 
-  napi_create_reference(env, argv[2], 1, &(self->ctx));
-  napi_create_reference(env, argv[3], 1, &(self->on_connection));
-  napi_create_reference(env, argv[4], 1, &(self->on_read));
-  napi_create_reference(env, argv[5], 1, &(self->on_write));
-  napi_create_reference(env, argv[6], 1, &(self->on_close));
-  napi_create_reference(env, argv[7], 1, &(self->on_server_close));
+  uv_loop_t *loop;
+  js_get_env_loop(env, &loop);
+
+  err = uv_tcp_init(loop, &self->tcp);
+  assert(err == 0);
+
+  err = js_create_reference(env, argv[2], 1, &self->ctx);
+  assert(err == 0);
+
+  err = js_create_reference(env, argv[3], 1, &self->on_connection);
+  assert(err == 0);
+
+  err = js_create_reference(env, argv[4], 1, &self->on_read);
+  assert(err == 0);
+
+  err = js_create_reference(env, argv[5], 1, &self->on_write);
+  assert(err == 0);
+
+  err = js_create_reference(env, argv[6], 1, &self->on_close);
+  assert(err == 0);
+
+  err = js_create_reference(env, argv[7], 1, &self->on_server_close);
+  assert(err == 0);
 
   return NULL;
 }
 
-NAPI_METHOD(pear_http_bind) {
-  NAPI_ARGV(3)
-  NAPI_ARGV_BUFFER_CAST(pear_http_t *, self, 0)
-  NAPI_ARGV_UINT32(port, 1)
-  NAPI_ARGV_UTF8(ip, 17, 2)
-
+static js_value_t *
+pear_http_bind (js_env_t *env, js_callback_info_t *info) {
   int err;
 
-  struct sockaddr_storage addr;
+  size_t argc = 3;
+  js_value_t *argv[3];
+
+  err = js_get_callback_info(env, info, &argc, argv, NULL, NULL);
+  assert(err == 0);
+
+  assert(argc == 3);
+
+  pear_http_server_t *self;
+  err = js_get_typedarray_info(env, argv[0], NULL, (void **) &self, NULL, NULL, NULL);
+  assert(err == 0);
+
+  uint32_t port;
+  err = js_get_value_uint32(env, argv[1], &port);
+  assert(err == 0);
+
+  char ip[17];
+  err = js_get_value_string_utf8(env, argv[2], ip, 17, NULL);
+  assert(err == 0);
+
   int addr_len = sizeof(struct sockaddr_in);
+
+  struct sockaddr_storage addr;
+
   err = uv_ip4_addr(ip, port, (struct sockaddr_in *) &addr);
-  if (err < 0) PEAR_HTTP_THROW(err)
+  if (err < 0) {
+    js_throw_error(env, uv_err_name(err), uv_strerror(err));
+    return NULL;
+  }
 
   err = uv_tcp_bind(&(self->tcp), (struct sockaddr *) &addr, 0);
-  if (err < 0) PEAR_HTTP_THROW(err)
+  if (err < 0) {
+    js_throw_error(env, uv_err_name(err), uv_strerror(err));
+    return NULL;
+  }
 
   struct sockaddr_storage name;
 
   err = uv_tcp_getsockname(&(self->tcp), (struct sockaddr *) &name, &addr_len);
-  if (err < 0) PEAR_HTTP_THROW(err)
+  if (err < 0) {
+    js_throw_error(env, uv_err_name(err), uv_strerror(err));
+    return NULL;
+  }
 
   int local_port = ntohs(((struct sockaddr_in *) &name)->sin_port);
 
   err = uv_listen((uv_stream_t *) &(self->tcp), 128, on_new_connection);
+  if (err < 0) {
+    js_throw_error(env, uv_err_name(err), uv_strerror(err));
+    return NULL;
+  }
 
-  NAPI_RETURN_UINT32(local_port)
+  js_value_t *res;
+  err = js_create_uint32(env, local_port, &res);
+  assert(err == 0);
+
+  return res;
 }
 
-NAPI_METHOD(pear_http_close) {
-  NAPI_ARGV(1)
-  NAPI_ARGV_BUFFER_CAST(pear_http_t *, self, 0)
+static js_value_t *
+pear_http_close (js_env_t *env, js_callback_info_t *info) {
+  int err;
+
+  size_t argc = 3;
+  js_value_t *argv[3];
+
+  err = js_get_callback_info(env, info, &argc, argv, NULL, NULL);
+  assert(err == 0);
+
+  assert(argc == 3);
+
+  pear_http_server_t *self;
+  err = js_get_typedarray_info(env, argv[0], NULL, (void **) &self, NULL, NULL, NULL);
+  assert(err == 0);
 
   uv_close((uv_handle_t *) self, on_server_close);
 
   return NULL;
 }
 
-NAPI_METHOD(pear_http_connection_write) {
-  NAPI_ARGV(3)
-  NAPI_ARGV_BUFFER_CAST(pear_http_connection_t *, c, 0)
-  NAPI_ARGV_BUFFER_CAST(uv_write_t *, req, 1)
+static js_value_t *
+pear_http_connection_write (js_env_t *env, js_callback_info_t *info) {
+  int err;
 
-  napi_value arr = argv[2];
-  napi_value item;
+  size_t argc = 3;
+  js_value_t *argv[3];
 
-  uint32_t nbufs;
-  napi_get_array_length(env, arr, &nbufs);
+  err = js_get_callback_info(env, info, &argc, argv, NULL, NULL);
+  assert(err == 0);
 
-  uv_buf_t *bufs = malloc(sizeof(uv_buf_t) * nbufs);
+  assert(argc == 3);
 
-  for (uint32_t i = 0; i < nbufs; i++) {
-    napi_get_element(env, arr, i, &item);
-    uv_buf_t *buf = &(bufs[i]);
-    napi_get_buffer_info(env, item, (void **) &(buf->base), &(buf->len));
+  pear_http_connection_t *conn;
+  err = js_get_typedarray_info(env, argv[0], NULL, (void **) &conn, NULL, NULL, NULL);
+  assert(err == 0);
+
+  uv_write_t *req;
+  err = js_get_typedarray_info(env, argv[1], NULL, (void **) &req, NULL, NULL, NULL);
+  assert(err == 0);
+
+  js_value_t *arr = argv[2];
+
+  uint32_t bufs_len;
+  err = js_get_array_length(env, arr, &bufs_len);
+  assert(err == 0);
+
+  uv_buf_t *bufs = malloc(sizeof(uv_buf_t) * bufs_len);
+
+  for (uint32_t i = 0; i < bufs_len; i++) {
+    js_value_t *item;
+    err = js_get_element(env, arr, i, &item);
+    assert(err == 0);
+
+    uv_buf_t *buf = &bufs[i];
+    err = js_get_typedarray_info(env, item, NULL, (void **) &buf->base, &buf->len, NULL, NULL);
+    assert(err == 0);
   }
 
-  req->data = c;
-  uv_write(req, (uv_stream_t *) c, bufs, nbufs, on_write);
+  req->data = conn;
+
+  err = uv_write(req, (uv_stream_t *) conn, bufs, bufs_len, on_write);
+  assert(err == 0);
 
   free(bufs);
 
   return NULL;
 }
 
-NAPI_METHOD(pear_http_connection_shutdown) {
-  NAPI_ARGV(2)
-  NAPI_ARGV_BUFFER_CAST(pear_http_connection_t *, c, 0)
-  NAPI_ARGV_BUFFER_CAST(uv_shutdown_t *, req, 1)
+static js_value_t *
+pear_http_connection_shutdown (js_env_t *env, js_callback_info_t *info) {
+  int err;
 
-  req->data = c;
-  uv_shutdown(req, (uv_stream_t *) c, on_shutdown);
+  size_t argc = 2;
+  js_value_t *argv[2];
+
+  err = js_get_callback_info(env, info, &argc, argv, NULL, NULL);
+  assert(err == 0);
+
+  assert(argc == 2);
+
+  pear_http_connection_t *conn;
+  err = js_get_typedarray_info(env, argv[0], NULL, (void **) &conn, NULL, NULL, NULL);
+  assert(err == 0);
+
+  uv_shutdown_t *req;
+  err = js_get_typedarray_info(env, argv[1], NULL, (void **) &req, NULL, NULL, NULL);
+  assert(err == 0);
+
+  req->data = conn;
+
+  err = uv_shutdown(req, (uv_stream_t *) conn, on_shutdown);
+  assert(err == 0);
 
   return NULL;
 }
 
-NAPI_METHOD(pear_http_connection_close) {
-  NAPI_ARGV(1)
-  NAPI_ARGV_BUFFER_CAST(pear_http_connection_t *, c, 0)
+static js_value_t *
+pear_http_connection_close (js_env_t *env, js_callback_info_t *info) {
+  int err;
 
-  uv_close((uv_handle_t *) c, on_connection_close);
+  size_t argc = 1;
+  js_value_t *argv[1];
+
+  err = js_get_callback_info(env, info, &argc, argv, NULL, NULL);
+  assert(err == 0);
+
+  assert(argc == 1);
+
+  pear_http_connection_t *conn;
+  err = js_get_typedarray_info(env, argv[0], NULL, (void **) &conn, NULL, NULL, NULL);
+  assert(err == 0);
+
+  uv_close((uv_handle_t *) conn, on_connection_close);
 
   return NULL;
 }
 
-NAPI_INIT() {
-  NAPI_EXPORT_SIZEOF(pear_http_t)
-  NAPI_EXPORT_SIZEOF(pear_http_connection_t)
-  NAPI_EXPORT_SIZEOF(uv_write_t)
-  NAPI_EXPORT_SIZEOF(uv_shutdown_t)
-  NAPI_EXPORT_OFFSETOF(pear_http_connection_t, id)
-  NAPI_EXPORT_FUNCTION(pear_http_init)
-  NAPI_EXPORT_FUNCTION(pear_http_bind)
-  NAPI_EXPORT_FUNCTION(pear_http_close)
-  NAPI_EXPORT_FUNCTION(pear_http_connection_write)
-  NAPI_EXPORT_FUNCTION(pear_http_connection_shutdown)
-  NAPI_EXPORT_FUNCTION(pear_http_connection_close)
+static js_value_t *
+init (js_env_t *env, js_value_t *exports) {
+  {
+    js_value_t *val;
+    js_create_uint32(env, sizeof(pear_http_server_t), &val);
+    js_set_named_property(env, exports, "sizeofServer", val);
+  }
+  {
+    js_value_t *val;
+    js_create_uint32(env, sizeof(pear_http_connection_t), &val);
+    js_set_named_property(env, exports, "sizeofConnection", val);
+  }
+  {
+    js_value_t *val;
+    js_create_uint32(env, sizeof(uv_write_t), &val);
+    js_set_named_property(env, exports, "sizeofWrite", val);
+  }
+  {
+    js_value_t *val;
+    js_create_uint32(env, sizeof(uv_shutdown_t), &val);
+    js_set_named_property(env, exports, "sizeofShutdown", val);
+  }
+  {
+    js_value_t *val;
+    js_create_uint32(env, offsetof(pear_http_connection_t, id), &val);
+    js_set_named_property(env, exports, "offsetofConnectionID", val);
+  }
+  {
+    js_value_t *fn;
+    js_create_function(env, "init", -1, pear_http_init, NULL, &fn);
+    js_set_named_property(env, exports, "init", fn);
+  }
+  {
+    js_value_t *fn;
+    js_create_function(env, "bind", -1, pear_http_bind, NULL, &fn);
+    js_set_named_property(env, exports, "bind", fn);
+  }
+  {
+    js_value_t *fn;
+    js_create_function(env, "close", -1, pear_http_close, NULL, &fn);
+    js_set_named_property(env, exports, "close", fn);
+  }
+  {
+    js_value_t *fn;
+    js_create_function(env, "connectionWrite", -1, pear_http_connection_write, NULL, &fn);
+    js_set_named_property(env, exports, "connectionWrite", fn);
+  }
+  {
+    js_value_t *fn;
+    js_create_function(env, "connectionShutdown", -1, pear_http_connection_shutdown, NULL, &fn);
+    js_set_named_property(env, exports, "connectionShutdown", fn);
+  }
+  {
+    js_value_t *fn;
+    js_create_function(env, "connectionClose", -1, pear_http_connection_close, NULL, &fn);
+    js_set_named_property(env, exports, "connectionClose", fn);
+  }
+
+  return exports;
 }
+
+PEAR_MODULE(pear_http, init)

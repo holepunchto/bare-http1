@@ -1,8 +1,8 @@
-const http = require('../')
 const parseRange = require('range-parser')
 const pump = require('pump')
 const mime = require('mime-types')
 const fs = require('fs')
+const http = require('..')
 
 const path = process.argv[2] // pass the filename to host
 const { size } = fs.statSync(path)

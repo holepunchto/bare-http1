@@ -26,8 +26,6 @@
   },
   "homepage": "https://github.com/holepunchto/pearjs-http#readme",
   "dependencies": {
-    "b4a": "^1.6.1",
-    "napi-macros": "^2.1.0",
     "streamx": "^2.13.0"
   },
   "devDependencies": {
