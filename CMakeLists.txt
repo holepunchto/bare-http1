@@ -1,13 +1,13 @@
 cmake_minimum_required(VERSION 3.25)
 
-project(pear_http C)
+project(bare_http C)
 
-include(pear)
+include(bare)
 
-add_pear_module(pear_http)
+add_bare_module(bare_http)
 
 target_sources(
-  pear_http
+  bare_http
   PRIVATE
     binding.c
 )

@@ -1,5 +1,5 @@
 {
-  "name": "@pearjs/http",
+  "name": "bare-http",
   "version": "1.1.0",
   "description": "Native HTTP library for JavaScript",
   "main": "index.js",
@@ -12,19 +12,19 @@
   ],
   "scripts": {
     "test": "standard",
-    "install": "pear-dev rebuild",
-    "prebuild": "pear-dev prebuild"
+    "install": "bare-dev rebuild",
+    "prebuild": "bare-dev prebuild"
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/holepunchto/pearjs-http.git"
+    "url": "https://github.com/holepunchto/bare-http.git"
   },
   "author": "Holepunch",
   "license": "Apache-2.0",
   "bugs": {
-    "url": "https://github.com/holepunchto/pearjs-http/issues"
+    "url": "https://github.com/holepunchto/bare-http/issues"
   },
-  "homepage": "https://github.com/holepunchto/pearjs-http#readme",
+  "homepage": "https://github.com/holepunchto/bare-http#readme",
   "dependencies": {
     "streamx": "^2.13.0"
   },
