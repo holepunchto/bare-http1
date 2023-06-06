@@ -2,6 +2,7 @@
 #include <bare.h>
 #include <js.h>
 #include <stdlib.h>
+#include <utf.h>
 #include <uv.h>
 
 typedef struct {
@@ -24,7 +25,7 @@ typedef struct {
 } bare_http_connection_t;
 
 static void
-alloc_buffer (uv_handle_t *handle, size_t suggested_size, uv_buf_t *buf) {
+on_alloc_buffer (uv_handle_t *handle, size_t suggested_size, uv_buf_t *buf) {
   bare_http_connection_t *conn = (bare_http_connection_t *) handle;
   bare_http_server_t *self = conn->server;
 
@@ -218,7 +219,7 @@ on_new_connection (uv_stream_t *server, int status) {
   client->server = self;
 
   if (uv_accept(server, (uv_stream_t *) client) == 0) {
-    uv_read_start((uv_stream_t *) client, alloc_buffer, on_read);
+    uv_read_start((uv_stream_t *) client, on_alloc_buffer, on_read);
   } else {
     uv_close((uv_handle_t *) client, on_connection_close);
   }
@@ -296,7 +297,7 @@ bare_http_bind (js_env_t *env, js_callback_info_t *info) {
   err = js_get_value_uint32(env, argv[1], &port);
   assert(err == 0);
 
-  char ip[17];
+  utf8_t ip[17];
   err = js_get_value_string_utf8(env, argv[2], ip, 17, NULL);
   assert(err == 0);
 
@@ -304,7 +305,7 @@ bare_http_bind (js_env_t *env, js_callback_info_t *info) {
 
   struct sockaddr_storage addr;
 
-  err = uv_ip4_addr(ip, port, (struct sockaddr_in *) &addr);
+  err = uv_ip4_addr((char *) ip, port, (struct sockaddr_in *) &addr);
   if (err < 0) {
     js_throw_error(env, uv_err_name(err), uv_strerror(err));
     return NULL;
