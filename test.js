@@ -1,0 +1,360 @@
+const test = require('brittle')
+const { createServer } = require('./')
+const { spawn } = require('bare-subprocess')
+
+test('basic', async function (t) {
+  t.plan(41)
+
+  const server = createServer()
+  t.is(server.host, null)
+  t.is(server.port, 0)
+  t.is(server.closing, false)
+  t.is(server.connections.length, 0)
+
+  server.on('listening', function () {
+    t.pass('server listening')
+  })
+
+  server.on('connection', function (socket) {
+    t.is(server.connections.length, 1)
+
+    t.ok(socket)
+    t.is(typeof socket.id, 'number')
+    t.is(socket.server, server)
+    t.is(socket.requests.size, 0)
+
+    socket.on('close', () => {
+      t.is(server.connections.length, 0)
+      t.pass('server socket closed')
+    })
+
+    socket.on('error', (err) => t.fail('server socket error: ' + err.message + ' (' + err.code + ')'))
+  })
+
+  server.on('request', function (req, res) {
+    t.ok(req)
+    t.is(req.method, 'GET')
+    t.is(req.url, '/something/?key1=value1&key2=value2&enabled')
+    t.alike(req.headers, { host: server.address().address + ':' + server.address().port, connection: 'close' })
+    t.alike(req.getHeader('connection'), 'close')
+    t.alike(req.getHeader('Connection'), 'close')
+    t.ok(req.socket)
+    t.is(req.socket.requests.size, 1)
+
+    t.ok(res)
+    t.is(res.statusCode, 200, 'default status code')
+    t.alike(res.headers, {})
+    t.ok(res.socket)
+    t.is(res.request, req)
+    t.is(res.headersSent, false, 'headers not flushed')
+    t.is(res.chunked, true, 'chunked by default')
+    t.is(res.onlyHeaders, false)
+
+    t.is(req.socket, res.socket)
+    t.is(server.connections[req.socket.id], req.socket)
+
+    res.setHeader('Content-Length', 12)
+    t.alike(res.headers, { 'content-length': 12 })
+    t.is(res.getHeader('content-length'), 12)
+    t.is(res.getHeader('Content-Length'), 12)
+
+    res.end('Hello world!')
+
+    req.on('close', function () {
+      t.pass('server request closed')
+    })
+
+    res.on('close', function () {
+      t.is(res.headersSent, true, 'headers flushed')
+      t.is(res.chunked, false, 'not chunked')
+      t.pass('server response closed')
+    })
+  })
+
+  server.listen(0)
+  await waitForServer(server)
+
+  const reply = await request({
+    method: 'GET',
+    host: server.address().address,
+    port: server.address().port,
+    path: '/something/?key1=value1&key2=value2&enabled'
+  })
+
+  t.absent(reply.error)
+  t.is(reply.response.statusCode, 200)
+
+  const body = Buffer.concat(reply.response.chunks)
+  t.alike(body, Buffer.from('Hello world!'), 'client response ended')
+
+  server.close()
+  server.on('close', function () {
+    t.pass('server closed')
+  })
+})
+
+test('port already in use', async function (t) {
+  t.plan(2)
+
+  const server = createServer()
+  server.listen(0)
+  await waitForServer(server)
+
+  const server2 = createServer()
+  server2.listen(server.address().port)
+
+  server2.on('error', function (err) {
+    t.is(err.code, 'EADDRINUSE')
+
+    server.close()
+    server.on('close', () => t.pass('original server closed'))
+  })
+})
+
+test('destroy request', async function (t) {
+  t.plan(5)
+
+  const server = createServer()
+  server.on('close', () => t.pass('server closed'))
+
+  server.on('connection', function (socket) {
+    socket.on('close', () => t.pass('server socket closed'))
+    socket.on('error', (err) => t.fail('server socket error: ' + err.message + ' (' + err.code + ')'))
+  })
+
+  server.on('request', function (req, res) {
+    req.destroy()
+
+    req.on('close', () => t.pass('server request closed'))
+  })
+
+  server.listen(0)
+  await waitForServer(server)
+
+  const reply = await request({
+    method: 'GET',
+    host: server.address().address,
+    port: server.address().port,
+    path: '/'
+  })
+
+  t.absent(reply.response, 'client should not receive a response')
+  t.ok(reply.error, 'client errored')
+
+  server.close()
+})
+
+test('destroy response', async function (t) {
+  t.plan(6)
+
+  const server = createServer()
+  server.on('close', () => t.pass('server closed'))
+
+  server.on('connection', function (socket) {
+    socket.on('close', () => t.pass('server socket closed'))
+    socket.on('error', (err) => t.fail('server socket error: ' + err.message + ' (' + err.code + ')'))
+  })
+
+  server.on('request', function (req, res) {
+    res.destroy()
+
+    req.on('close', () => t.pass('server request closed'))
+    res.on('close', () => t.pass('server response closed'))
+  })
+
+  server.listen(0)
+  await waitForServer(server)
+
+  const reply = await request({
+    method: 'GET',
+    host: server.address().address,
+    port: server.address().port,
+    path: '/'
+  })
+
+  t.absent(reply.response, 'client should not receive a response')
+  t.ok(reply.error, 'client errored')
+
+  server.close()
+})
+
+test('write head', async function (t) {
+  t.plan(8)
+
+  const server = createServer()
+  server.on('close', () => t.pass('server closed'))
+
+  server.on('connection', function (socket) {
+    socket.on('close', () => t.pass('server socket closed'))
+    socket.on('error', (err) => t.fail('server socket error: ' + err.message + ' (' + err.code + ')'))
+  })
+
+  server.on('request', function (req, res) {
+    res.writeHead(404) // TODO: should set content-length to zero?
+    res.end()
+
+    req.on('close', () => t.pass('server request closed'))
+    res.on('close', () => t.pass('server response closed'))
+  })
+
+  server.listen(0)
+  await waitForServer(server)
+
+  const reply = await request({
+    method: 'GET',
+    host: server.address().address,
+    port: server.address().port,
+    path: '/'
+  })
+
+  t.absent(reply.error)
+  t.is(reply.response.statusCode, 404)
+  t.alike(reply.response.chunks, [])
+  t.ok(reply.response.ended)
+
+  server.close()
+})
+
+test('write head with headers', async function (t) {
+  t.plan(9)
+
+  const server = createServer()
+  server.on('close', () => t.pass('server closed'))
+
+  server.on('connection', function (socket) {
+    socket.on('close', () => t.pass('server socket closed'))
+    socket.on('error', (err) => t.fail('server socket error: ' + err.message + ' (' + err.code + ')'))
+  })
+
+  server.on('request', function (req, res) {
+    res.writeHead(404, { 'x-custom': 1234 })
+    res.end()
+
+    req.on('close', () => t.pass('server request closed'))
+    res.on('close', () => t.pass('server response closed'))
+  })
+
+  server.listen(0)
+  await waitForServer(server)
+
+  const reply = await request({
+    method: 'GET',
+    host: server.address().address,
+    port: server.address().port,
+    path: '/'
+  })
+
+  t.absent(reply.error)
+  t.is(reply.response.statusCode, 404)
+  t.alike(reply.response.chunks, [], 'client should not receive data')
+  t.ok(reply.response.ended, 'client response ended')
+  t.is(reply.response.headers['x-custom'], '1234')
+
+  server.close()
+})
+
+test('chunked', async function (t) {
+  t.plan(9)
+
+  const server = createServer()
+  server.on('close', () => t.pass('server closed'))
+
+  server.on('connection', function (socket) {
+    socket.on('close', () => t.pass('server socket closed'))
+    socket.on('error', (err) => t.fail('server socket error: ' + err.message + ' (' + err.code + ')'))
+  })
+
+  server.on('request', function (req, res) {
+    res.write('part 1 + ')
+    setImmediate(() => {
+      res.end('part 2')
+    })
+
+    t.is(res.chunked, true, 'chunked by default')
+    res.on('close', () => {
+      t.is(res.chunked, true, 'still chunked')
+    })
+
+    req.on('close', () => t.pass('server request closed'))
+    res.on('close', () => t.pass('server response closed'))
+  })
+
+  server.listen(0)
+  await waitForServer(server)
+
+  const reply = await request({
+    method: 'GET',
+    host: server.address().address,
+    port: server.address().port,
+    path: '/'
+  })
+
+  t.absent(reply.error)
+  t.is(reply.response.statusCode, 200)
+
+  const body = Buffer.concat(reply.response.chunks)
+  t.alike(body, Buffer.from('part 1 + part 2'), 'client response ended')
+
+  server.close()
+})
+
+function waitForServer (server) {
+  return new Promise((resolve, reject) => {
+    server.on('listening', done)
+    server.on('error', done)
+
+    function done (error) {
+      server.removeListener('listening', done)
+      server.removeListener('error', done)
+      error ? reject(error) : resolve()
+    }
+  })
+}
+
+function request (opts) {
+  const src = `
+    const http = require('http')
+    const client = http.request(${JSON.stringify(opts)})
+
+    const result = {
+      statusCode: 0,
+      error: null,
+      response: null
+    }
+
+    client.on('error', function (err) {
+      result.error = err.message
+    })
+
+    client.on('response', function (res) {
+      const r = result.response = { statusCode: res.statusCode, headers: res.headers, ended: false, chunks: [] }
+      r.statusCode = res.statusCode
+      res.on('data', (chunk) => r.chunks.push(chunk.toString('hex')))
+      res.on('end', () => {
+        r.ended = true
+      })
+    })
+
+    client.on('close', () => {
+      process.stdout.write(JSON.stringify(result))
+    })
+
+    client.end()
+  `
+
+  const proc = spawn('node', ['-e', src])
+  const all = []
+
+  proc.stdout.on('data', function (data) {
+    all.push(data)
+  })
+
+  return new Promise((resolve, reject) => {
+    proc.on('exit', function (code) {
+      if (code) return reject(new Error('Bad exit: ' + code))
+      const result = JSON.parse(Buffer.concat(all).toString())
+      if (result.response) result.response.chunks = result.response.chunks.map(c => Buffer.from(c, 'hex'))
+      resolve(result)
+    })
+  })
+}

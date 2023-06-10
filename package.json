@@ -11,7 +11,7 @@
     "prebuilds"
   ],
   "scripts": {
-    "test": "standard",
+    "test": "standard && bare test.js",
     "install": "bare-dev rebuild",
     "prebuild": "bare-dev prebuild"
   },
@@ -29,6 +29,8 @@
     "streamx": "^2.13.0"
   },
   "devDependencies": {
+    "bare-subprocess": "^1.0.0",
+    "brittle": "^3.3.0",
     "mime-types": "^2.1.35",
     "pump": "^3.0.0",
     "range-parser": "^1.2.1",
