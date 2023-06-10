@@ -1,9 +1,9 @@
-# bare-http
+# bare-http1
 
-Native HTTP library for JavaScript.
+Native HTTP/1 library for JavaScript.
 
 ```
-npm i bare-http
+npm i bare-http1
 ```
 
 Only HTTP servers at the moment and current does NOT support server request bodies, but supports most other HTTP features (keep-alive, chunked encoding etc) and streaming server responses.
@@ -11,7 +11,7 @@ Only HTTP servers at the moment and current does NOT support server request bodi
 ## Usage
 
 ``` js
-const http = require('bare-http')
+const http = require('bare-http1')
 
 // Same API as Node.js
 

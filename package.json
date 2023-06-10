@@ -1,7 +1,7 @@
 {
-  "name": "bare-http",
+  "name": "bare-http1",
   "version": "1.1.2",
-  "description": "Native HTTP library for JavaScript",
+  "description": "Native HTTP/1 library for JavaScript",
   "main": "index.js",
   "files": [
     "index.js",
@@ -17,14 +17,14 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/holepunchto/bare-http.git"
+    "url": "https://github.com/holepunchto/bare-http1.git"
   },
   "author": "Holepunch",
   "license": "Apache-2.0",
   "bugs": {
-    "url": "https://github.com/holepunchto/bare-http/issues"
+    "url": "https://github.com/holepunchto/bare-http1/issues"
   },
-  "homepage": "https://github.com/holepunchto/bare-http#readme",
+  "homepage": "https://github.com/holepunchto/bare-http1#readme",
   "dependencies": {
     "streamx": "^2.13.0"
   },
