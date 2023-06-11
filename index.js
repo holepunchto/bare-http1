@@ -300,16 +300,17 @@ class Request extends stream.Readable {
 
 class Response extends stream.Writable {
   constructor (socket, request, close) {
-    super()
+    super({ map: mapToBuffer })
 
     this.statusCode = 200
     this.headers = {}
     this.socket = socket
     this.request = request
-    this.headersFlushed = false
+    this.headersSent = false
     this.chunked = true
     this.close = close
     this.ondrain = null
+    this.finishing = false
     this.onlyHeaders = this.request.method === 'HEAD'
 
     socket.on('drain', () => this._writeContinue())
@@ -317,8 +318,7 @@ class Response extends stream.Writable {
 
   writeHead (statusCode, headers) {
     this.statusCode = statusCode
-    this.headers = headers
-    this.flushHeaders()
+    this.headers = headers || {}
   }
 
   _writeContinue () {
@@ -335,10 +335,15 @@ class Response extends stream.Writable {
   }
 
   _write (data, callback) {
-    if (this.headersFlushed === false) this.flushHeaders()
-    if (this.onlyHeaders === true) return callback(null)
+    if (this.headersSent === false) {
+      if (this.finishing) {
+        const bytes = data.byteLength + this._writableState.buffered
+        this.setHeader('Content-Length', '' + bytes)
+      }
+      this.flushHeaders()
+    }
 
-    if (typeof data === 'string') data = Buffer.from(data)
+    if (this.onlyHeaders === true) return callback(null)
 
     if (this.chunked) {
       data = Buffer.concat([
@@ -357,12 +362,20 @@ class Response extends stream.Writable {
   }
 
   _final (callback) {
-    if (this.headersFlushed === false) this.flushHeaders()
+    if (this.headersSent === false) {
+      this.setHeader('Content-Length', '0')
+      this.flushHeaders()
+    }
 
     if (this.chunked && this.onlyHeaders === false) this.socket.write(Buffer.from('0\r\n\r\n'))
     if (this.close) this.socket.end()
 
     callback(null)
+  }
+
+  end (data) {
+    this.finishing = true
+    return super.end(data)
   }
 
   setHeader (name, value) {
@@ -374,7 +387,7 @@ class Response extends stream.Writable {
   }
 
   flushHeaders () {
-    if (this.headersFlushed === true) return
+    if (this.headersSent === true) return
 
     let h = 'HTTP/1.1 ' + this.statusCode + ' ' + STATUS_CODES.get(this.statusCode) + '\r\n'
     for (const name of Object.keys(this.headers)) {
@@ -390,7 +403,7 @@ class Response extends stream.Writable {
     h += '\r\n'
 
     this.socket.write(Buffer.from(h))
-    this.headersFlushed = true
+    this.headersSent = true
   }
 }
 
@@ -403,3 +416,7 @@ function httpCase (n) {
 }
 
 function noop () {}
+
+function mapToBuffer (b) {
+  return typeof b === 'string' ? Buffer.from(b) : b
+}
