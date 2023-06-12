@@ -200,9 +200,9 @@ module.exports = class Server extends EventEmitter {
       else if (this.closing && this.connections.length === 0) binding.close(this.handle)
     })
 
-    this.emit('connection', c)
+    binding.accept(this.handle, c.handle)
 
-    return c.handle
+    this.emit('connection', c)
   }
 
   _onread (id, read) {

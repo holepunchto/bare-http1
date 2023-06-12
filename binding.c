@@ -202,27 +202,7 @@ on_new_connection (uv_stream_t *server, int status) {
   err = js_get_reference_value(env, self->on_connection, &on_connection);
   assert(err == 0);
 
-  js_value_t *res;
-
-  err = js_call_function(env, ctx, on_connection, 0, NULL, &res);
-  if (err < 0) return;
-
-  bare_http_connection_t *client;
-  size_t client_size;
-
-  err = js_get_typedarray_info(env, res, NULL, (void **) &client, &client_size, NULL, NULL);
-  assert(err == 0);
-
-  err = uv_tcp_init(loop, (uv_tcp_t *) client);
-  assert(err == 0);
-
-  client->server = self;
-
-  if (uv_accept(server, (uv_stream_t *) client) == 0) {
-    uv_read_start((uv_stream_t *) client, on_alloc_buffer, on_read);
-  } else {
-    uv_close((uv_handle_t *) client, on_connection_close);
-  }
+  js_call_function(env, ctx, on_connection, 0, NULL, NULL);
 }
 
 static js_value_t *
@@ -362,6 +342,41 @@ bare_http_close (js_env_t *env, js_callback_info_t *info) {
 }
 
 static js_value_t *
+bare_http_accept (js_env_t *env, js_callback_info_t *info) {
+  int err;
+
+  size_t argc = 2;
+  js_value_t *argv[2];
+
+  err = js_get_callback_info(env, info, &argc, argv, NULL, NULL);
+  assert(err == 0);
+
+  bare_http_server_t *server;
+  err = js_get_typedarray_info(env, argv[0], NULL, (void **) &server, NULL, NULL, NULL);
+  assert(err == 0);
+
+  bare_http_connection_t *client;
+  err = js_get_typedarray_info(env, argv[1], NULL, (void **) &client, NULL, NULL, NULL);
+  assert(err == 0);
+
+  uv_loop_t *loop;
+  js_get_env_loop(env, &loop);
+
+  err = uv_tcp_init(loop, (uv_tcp_t *) client);
+  assert(err == 0);
+
+  client->server = server;
+
+  if (uv_accept((uv_stream_t *) server, (uv_stream_t *) client) == 0) {
+    uv_read_start((uv_stream_t *) client, on_alloc_buffer, on_read);
+  } else {
+    uv_close((uv_handle_t *) client, on_connection_close);
+  }
+
+  return NULL;
+}
+
+static js_value_t *
 bare_http_connection_write (js_env_t *env, js_callback_info_t *info) {
   int err;
 
@@ -494,6 +509,11 @@ init (js_env_t *env, js_value_t *exports) {
     js_value_t *fn;
     js_create_function(env, "bind", -1, bare_http_bind, NULL, &fn);
     js_set_named_property(env, exports, "bind", fn);
+  }
+  {
+    js_value_t *fn;
+    js_create_function(env, "accept", -1, bare_http_accept, NULL, &fn);
+    js_set_named_property(env, exports, "accept", fn);
   }
   {
     js_value_t *fn;
