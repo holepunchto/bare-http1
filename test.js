@@ -331,6 +331,50 @@ test('destroy socket', async function (t) {
   server.close()
 })
 
+test('server does a big write', async function (t) {
+  t.plan(7)
+
+  const server = createServer()
+  server.on('close', () => t.pass('server closed'))
+
+  server.on('connection', function (socket) {
+    socket.on('close', () => t.pass('server socket closed'))
+    socket.on('error', (err) => {
+      console.error(err)
+      t.fail('server socket error: ' + err.message + ' (' + err.code + ')')
+    })
+  })
+
+  server.on('request', function (req, res) {
+    res.write(Buffer.alloc(2 * 1024 * 1024, 'abcd'))
+    setImmediate(() => {
+      res.end(Buffer.alloc(2 * 1024 * 1024, 'efgh'))
+    })
+
+    req.on('close', () => t.pass('server request closed'))
+    res.on('close', () => t.pass('server response closed'))
+  })
+
+  server.listen(0)
+  await waitForServer(server)
+
+  const reply = await request({
+   method: 'GET',
+   host: server.address().address,
+   port: server.address().port,
+   path: '/'
+  })
+
+  t.is(reply.response.statusCode, 200)
+  t.ok(reply.response.ended)
+
+  const body = Buffer.concat(reply.response.chunks)
+  const expected = Buffer.concat([Buffer.alloc(2 * 1024 * 1024, 'abcd'), Buffer.alloc(2 * 1024 * 1024, 'efgh')])
+  t.alike(body, expected, 'client response ended')
+
+  server.close()
+})
+
 function waitForServer (server) {
   return new Promise((resolve, reject) => {
     server.on('listening', done)
