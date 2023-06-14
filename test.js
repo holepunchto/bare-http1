@@ -359,10 +359,10 @@ test('server does a big write', async function (t) {
   await waitForServer(server)
 
   const reply = await request({
-   method: 'GET',
-   host: server.address().address,
-   port: server.address().port,
-   path: '/'
+    method: 'GET',
+    host: server.address().address,
+    port: server.address().port,
+    path: '/'
   })
 
   t.is(reply.response.statusCode, 200)
