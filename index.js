@@ -276,6 +276,14 @@ module.exports = class Server extends EventEmitter {
 
     return this
   }
+
+  ref () {
+    binding.ref(this.handle)
+  }
+
+  unref () {
+    binding.unref(this.handle)
+  }
 }
 
 class Request extends stream.Readable {
