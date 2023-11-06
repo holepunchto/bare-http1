@@ -35,9 +35,9 @@ test('basic', async function (t) {
     t.ok(req)
     t.is(req.method, 'GET')
     t.is(req.url, '/something/?key1=value1&key2=value2&enabled')
-    t.alike(req.headers, { host: server.address().address + ':' + server.address().port, connection: 'close' })
-    t.alike(req.getHeader('connection'), 'close')
-    t.alike(req.getHeader('Connection'), 'close')
+    t.alike(req.headers, { host: server.address().address + ':' + server.address().port, connection: 'keep-alive' })
+    t.alike(req.getHeader('connection'), 'keep-alive')
+    t.alike(req.getHeader('Connection'), 'keep-alive')
     t.ok(req.socket)
     t.is(req.socket.requests.size, 1)
 
