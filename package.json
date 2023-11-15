@@ -10,6 +10,9 @@
     "CMakeLists.txt",
     "prebuilds"
   ],
+  "imports": {
+    "events": "bare-events"
+  },
   "scripts": {
     "test": "standard && bare test.js"
   },
@@ -24,10 +27,11 @@
   },
   "homepage": "https://github.com/holepunchto/bare-http1#readme",
   "dependencies": {
+    "bare-events": "^2.0.0",
     "streamx": "^2.13.0"
   },
   "devDependencies": {
-    "bare-subprocess": "^1.0.0",
+    "bare-subprocess": "^2.0.0",
     "brittle": "^3.3.0",
     "mime-types": "^2.1.35",
     "pump": "^3.0.0",

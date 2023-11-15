@@ -1,4 +1,4 @@
-const EventEmitter = require('events')
+const EventEmitter = require('bare-events')
 const stream = require('streamx')
 const binding = require('./binding')
 

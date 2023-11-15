@@ -1,6 +1,6 @@
 const test = require('brittle')
-const { createServer } = require('./')
 const { spawn } = require('bare-subprocess')
+const { createServer } = require('.')
 
 test('basic', async function (t) {
   t.plan(41)
@@ -105,6 +105,8 @@ test('port already in use', async function (t) {
 
   server2.on('error', function (err) {
     t.is(err.code, 'EADDRINUSE')
+
+    server2.close()
 
     server.close()
     server.on('close', () => t.pass('original server closed'))
