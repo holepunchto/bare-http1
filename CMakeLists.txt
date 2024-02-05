@@ -12,8 +12,10 @@ target_sources(
     binding.c
 )
 
-target_link_libraries(
-  bare_http1
-  INTERFACE
-    ws2_32
-)
+if(WIN32)
+  target_link_libraries(
+    bare_http1
+    INTERFACE
+      ws2_32
+  )
+endif()
