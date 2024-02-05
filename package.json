@@ -10,15 +10,15 @@
     "CMakeLists.txt",
     "prebuilds"
   ],
-  "imports": {
-    "events": "bare-events"
+  "addon": {
+    "target": "bare_http1"
   },
   "scripts": {
     "test": "standard && bare test.js"
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/holepunchto/bare-http1.git"
+    "url": "git+https://github.com/holepunchto/bare-http1.git"
   },
   "author": "Holepunch",
   "license": "Apache-2.0",
@@ -37,8 +37,5 @@
     "pump": "^3.0.0",
     "range-parser": "^1.2.1",
     "standard": "^17.0.0"
-  },
-  "addon": {
-    "target": "bare_http1"
   }
 }
