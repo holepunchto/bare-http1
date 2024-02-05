@@ -11,3 +11,9 @@ target_sources(
   PRIVATE
     binding.c
 )
+
+target_link_libraries(
+  bare_http1
+  INTERFACE
+    ws2_32
+)

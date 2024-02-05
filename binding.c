@@ -452,7 +452,7 @@ bare_http_connection_write (js_env_t *env, js_callback_info_t *info) {
     assert(err == 0);
 
     uv_buf_t *buf = &bufs[i];
-    err = js_get_typedarray_info(env, item, NULL, (void **) &buf->base, &buf->len, NULL, NULL);
+    err = js_get_typedarray_info(env, item, NULL, (void **) &buf->base, (size_t *) &buf->len, NULL, NULL);
     assert(err == 0);
   }
 
