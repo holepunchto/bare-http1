@@ -7,14 +7,14 @@ include(bare)
 add_bare_module(bare_http1)
 
 target_sources(
-  bare_http1
+  ${bare_http1}
   PRIVATE
     binding.c
 )
 
 if(WIN32)
   target_link_libraries(
-    bare_http1
+    ${bare_http1}
     INTERFACE
       ws2_32
   )
