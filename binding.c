@@ -42,6 +42,10 @@ on_connection_close (uv_handle_t *handle) {
 
   js_env_t *env = self->env;
 
+  js_handle_scope_t *scope;
+  err = js_open_handle_scope(env, &scope);
+  assert(err == 0);
+
   js_value_t *ctx;
   err = js_get_reference_value(env, self->ctx, &ctx);
   assert(err == 0);
@@ -56,6 +60,9 @@ on_connection_close (uv_handle_t *handle) {
   assert(err == 0);
 
   js_call_function(env, ctx, on_close, 1, argv, NULL);
+
+  err = js_close_handle_scope(env, scope);
+  assert(err == 0);
 }
 
 static void
@@ -65,6 +72,10 @@ on_server_close (uv_handle_t *handle) {
   int err;
 
   js_env_t *env = self->env;
+
+  js_handle_scope_t *scope;
+  err = js_open_handle_scope(env, &scope);
+  assert(err == 0);
 
   js_value_t *ctx;
   err = js_get_reference_value(env, self->ctx, &ctx);
@@ -93,6 +104,9 @@ on_server_close (uv_handle_t *handle) {
 
   err = js_delete_reference(env, self->ctx);
   assert(err == 0);
+
+  err = js_close_handle_scope(env, scope);
+  assert(err == 0);
 }
 
 static void
@@ -104,6 +118,10 @@ on_write (uv_write_t *req, int status) {
 
   js_env_t *env = self->env;
 
+  js_handle_scope_t *scope;
+  err = js_open_handle_scope(env, &scope);
+  assert(err == 0);
+
   js_value_t *ctx;
   err = js_get_reference_value(env, self->ctx, &ctx);
   assert(err == 0);
@@ -121,6 +139,9 @@ on_write (uv_write_t *req, int status) {
   assert(err == 0);
 
   js_call_function(env, ctx, on_write, 2, argv, NULL);
+
+  err = js_close_handle_scope(env, scope);
+  assert(err == 0);
 }
 
 static void
@@ -132,6 +153,10 @@ on_shutdown (uv_shutdown_t *req, int status) {
 
   js_env_t *env = self->env;
 
+  js_handle_scope_t *scope;
+  err = js_open_handle_scope(env, &scope);
+  assert(err == 0);
+
   js_value_t *ctx;
   err = js_get_reference_value(env, self->ctx, &ctx);
   assert(err == 0);
@@ -149,6 +174,9 @@ on_shutdown (uv_shutdown_t *req, int status) {
   assert(err == 0);
 
   js_call_function(env, ctx, on_write, 2, argv, NULL);
+
+  err = js_close_handle_scope(env, scope);
+  assert(err == 0);
 }
 
 static void
@@ -161,6 +189,10 @@ on_read (uv_stream_t *client, ssize_t nread, const uv_buf_t *buf) {
   int err;
 
   js_env_t *env = self->env;
+
+  js_handle_scope_t *scope;
+  err = js_open_handle_scope(env, &scope);
+  assert(err == 0);
 
   js_value_t *ctx;
   err = js_get_reference_value(env, self->ctx, &ctx);
@@ -179,6 +211,9 @@ on_read (uv_stream_t *client, ssize_t nread, const uv_buf_t *buf) {
   assert(err == 0);
 
   js_call_function(env, ctx, on_read, 2, argv, NULL);
+
+  err = js_close_handle_scope(env, scope);
+  assert(err == 0);
 }
 
 static void
@@ -194,6 +229,10 @@ on_new_connection (uv_stream_t *server, int status) {
 
   js_env_t *env = self->env;
 
+  js_handle_scope_t *scope;
+  err = js_open_handle_scope(env, &scope);
+  assert(err == 0);
+
   js_value_t *ctx;
   err = js_get_reference_value(env, self->ctx, &ctx);
   assert(err == 0);
@@ -203,6 +242,9 @@ on_new_connection (uv_stream_t *server, int status) {
   assert(err == 0);
 
   js_call_function(env, ctx, on_connection, 0, NULL, NULL);
+
+  err = js_close_handle_scope(env, scope);
+  assert(err == 0);
 }
 
 static js_value_t *
