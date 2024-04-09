@@ -7,6 +7,7 @@
 
 typedef struct {
   uv_tcp_t tcp;
+
   js_env_t *env;
   js_ref_t *ctx;
   js_ref_t *on_connection;
@@ -14,49 +15,54 @@ typedef struct {
   js_ref_t *on_write;
   js_ref_t *on_close;
   js_ref_t *on_server_close;
+
   char *read_buf;
   size_t read_buf_len;
-} bare_http_server_t;
+} bare_http1_server_t;
 
 typedef struct {
   uv_tcp_t tcp;
-  bare_http_server_t *server;
+
+  bare_http1_server_t *server;
+
   uint32_t id;
-} bare_http_connection_t;
+} bare_http1_connection_t;
 
 static void
-on_alloc_buffer (uv_handle_t *handle, size_t suggested_size, uv_buf_t *buf) {
-  bare_http_connection_t *conn = (bare_http_connection_t *) handle;
-  bare_http_server_t *self = conn->server;
+bare_http1__on_alloc_buffer (uv_handle_t *handle, size_t suggested_size, uv_buf_t *buf) {
+  bare_http1_connection_t *connection = (bare_http1_connection_t *) handle;
 
-  buf->base = self->read_buf;
-  buf->len = self->read_buf_len;
+  bare_http1_server_t *server = connection->server;
+
+  buf->base = server->read_buf;
+  buf->len = server->read_buf_len;
 }
 
 static void
-on_connection_close (uv_handle_t *handle) {
-  bare_http_connection_t *conn = (bare_http_connection_t *) handle;
-  bare_http_server_t *self = conn->server;
+bare_http1__on_connection_close (uv_handle_t *handle) {
+  bare_http1_connection_t *connection = (bare_http1_connection_t *) handle;
+
+  bare_http1_server_t *server = connection->server;
 
   int err;
 
-  js_env_t *env = self->env;
+  js_env_t *env = server->env;
 
   js_handle_scope_t *scope;
   err = js_open_handle_scope(env, &scope);
   assert(err == 0);
 
   js_value_t *ctx;
-  err = js_get_reference_value(env, self->ctx, &ctx);
+  err = js_get_reference_value(env, server->ctx, &ctx);
   assert(err == 0);
 
   js_value_t *on_close;
-  err = js_get_reference_value(env, self->on_close, &on_close);
+  err = js_get_reference_value(env, server->on_close, &on_close);
   assert(err == 0);
 
   js_value_t *argv[1];
 
-  err = js_create_uint32(env, conn->id, &argv[0]);
+  err = js_create_uint32(env, connection->id, &argv[0]);
   assert(err == 0);
 
   js_call_function(env, ctx, on_close, 1, argv, NULL);
@@ -66,43 +72,43 @@ on_connection_close (uv_handle_t *handle) {
 }
 
 static void
-on_server_close (uv_handle_t *handle) {
-  bare_http_server_t *self = (bare_http_server_t *) handle;
+bare_http1__on_server_close (uv_handle_t *handle) {
+  bare_http1_server_t *server = (bare_http1_server_t *) handle;
 
   int err;
 
-  js_env_t *env = self->env;
+  js_env_t *env = server->env;
 
   js_handle_scope_t *scope;
   err = js_open_handle_scope(env, &scope);
   assert(err == 0);
 
   js_value_t *ctx;
-  err = js_get_reference_value(env, self->ctx, &ctx);
+  err = js_get_reference_value(env, server->ctx, &ctx);
   assert(err == 0);
 
   js_value_t *on_server_close;
-  err = js_get_reference_value(env, self->on_server_close, &on_server_close);
+  err = js_get_reference_value(env, server->on_server_close, &on_server_close);
   assert(err == 0);
 
   js_call_function(env, ctx, on_server_close, 0, NULL, NULL);
 
-  err = js_delete_reference(env, self->on_connection);
+  err = js_delete_reference(env, server->on_connection);
   assert(err == 0);
 
-  err = js_delete_reference(env, self->on_read);
+  err = js_delete_reference(env, server->on_read);
   assert(err == 0);
 
-  err = js_delete_reference(env, self->on_write);
+  err = js_delete_reference(env, server->on_write);
   assert(err == 0);
 
-  err = js_delete_reference(env, self->on_close);
+  err = js_delete_reference(env, server->on_close);
   assert(err == 0);
 
-  err = js_delete_reference(env, self->on_server_close);
+  err = js_delete_reference(env, server->on_server_close);
   assert(err == 0);
 
-  err = js_delete_reference(env, self->ctx);
+  err = js_delete_reference(env, server->ctx);
   assert(err == 0);
 
   err = js_close_handle_scope(env, scope);
@@ -110,29 +116,30 @@ on_server_close (uv_handle_t *handle) {
 }
 
 static void
-on_write (uv_write_t *req, int status) {
-  bare_http_connection_t *conn = (bare_http_connection_t *) req->data;
-  bare_http_server_t *self = conn->server;
+bare_http1__on_write (uv_write_t *req, int status) {
+  bare_http1_connection_t *connection = (bare_http1_connection_t *) req->data;
+
+  bare_http1_server_t *server = connection->server;
 
   int err;
 
-  js_env_t *env = self->env;
+  js_env_t *env = server->env;
 
   js_handle_scope_t *scope;
   err = js_open_handle_scope(env, &scope);
   assert(err == 0);
 
   js_value_t *ctx;
-  err = js_get_reference_value(env, self->ctx, &ctx);
+  err = js_get_reference_value(env, server->ctx, &ctx);
   assert(err == 0);
 
   js_value_t *on_write;
-  err = js_get_reference_value(env, self->on_write, &on_write);
+  err = js_get_reference_value(env, server->on_write, &on_write);
   assert(err == 0);
 
   js_value_t *argv[2];
 
-  err = js_create_uint32(env, conn->id, &argv[0]);
+  err = js_create_uint32(env, connection->id, &argv[0]);
   assert(err == 0);
 
   err = js_create_int32(env, status, &argv[1]);
@@ -145,29 +152,30 @@ on_write (uv_write_t *req, int status) {
 }
 
 static void
-on_shutdown (uv_shutdown_t *req, int status) {
-  bare_http_connection_t *conn = (bare_http_connection_t *) req->data;
-  bare_http_server_t *self = conn->server;
+bare_http1__on_shutdown (uv_shutdown_t *req, int status) {
+  bare_http1_connection_t *connection = (bare_http1_connection_t *) req->data;
+
+  bare_http1_server_t *server = connection->server;
 
   int err;
 
-  js_env_t *env = self->env;
+  js_env_t *env = server->env;
 
   js_handle_scope_t *scope;
   err = js_open_handle_scope(env, &scope);
   assert(err == 0);
 
   js_value_t *ctx;
-  err = js_get_reference_value(env, self->ctx, &ctx);
+  err = js_get_reference_value(env, server->ctx, &ctx);
   assert(err == 0);
 
   js_value_t *on_write;
-  err = js_get_reference_value(env, self->on_write, &on_write);
+  err = js_get_reference_value(env, server->on_write, &on_write);
   assert(err == 0);
 
   js_value_t *argv[2];
 
-  err = js_create_uint32(env, conn->id, &argv[0]);
+  err = js_create_uint32(env, connection->id, &argv[0]);
   assert(err == 0);
 
   err = js_create_int32(env, status, &argv[1]);
@@ -180,31 +188,32 @@ on_shutdown (uv_shutdown_t *req, int status) {
 }
 
 static void
-on_read (uv_stream_t *client, ssize_t nread, const uv_buf_t *buf) {
-  bare_http_connection_t *conn = (bare_http_connection_t *) client;
-  bare_http_server_t *self = (bare_http_server_t *) conn->server;
+bare_http1__on_read (uv_stream_t *handle, ssize_t nread, const uv_buf_t *buf) {
+  bare_http1_connection_t *connection = (bare_http1_connection_t *) handle;
+
+  bare_http1_server_t *server = connection->server;
 
   if (nread == 0) return;
 
   int err;
 
-  js_env_t *env = self->env;
+  js_env_t *env = server->env;
 
   js_handle_scope_t *scope;
   err = js_open_handle_scope(env, &scope);
   assert(err == 0);
 
   js_value_t *ctx;
-  err = js_get_reference_value(env, self->ctx, &ctx);
+  err = js_get_reference_value(env, server->ctx, &ctx);
   assert(err == 0);
 
   js_value_t *on_read;
-  err = js_get_reference_value(env, self->on_read, &on_read);
+  err = js_get_reference_value(env, server->on_read, &on_read);
   assert(err == 0);
 
   js_value_t *argv[2];
 
-  err = js_create_uint32(env, conn->id, &argv[0]);
+  err = js_create_uint32(env, connection->id, &argv[0]);
   assert(err == 0);
 
   err = js_create_int32(env, nread == UV_EOF ? 0 : (int32_t) nread, &argv[1]);
@@ -217,28 +226,28 @@ on_read (uv_stream_t *client, ssize_t nread, const uv_buf_t *buf) {
 }
 
 static void
-on_new_connection (uv_stream_t *server, int status) {
-  if (status < 0) return; // TODO: mb bubble up?
+bare_http1__on_connection (uv_stream_t *handle, int status) {
+  if (status < 0) return; // TODO: Handle errors
 
-  bare_http_server_t *self = (bare_http_server_t *) server;
+  bare_http1_server_t *server = (bare_http1_server_t *) handle;
 
   uv_loop_t *loop;
-  js_get_env_loop(self->env, &loop);
+  js_get_env_loop(server->env, &loop);
 
   int err;
 
-  js_env_t *env = self->env;
+  js_env_t *env = server->env;
 
   js_handle_scope_t *scope;
   err = js_open_handle_scope(env, &scope);
   assert(err == 0);
 
   js_value_t *ctx;
-  err = js_get_reference_value(env, self->ctx, &ctx);
+  err = js_get_reference_value(env, server->ctx, &ctx);
   assert(err == 0);
 
   js_value_t *on_connection;
-  err = js_get_reference_value(env, self->on_connection, &on_connection);
+  err = js_get_reference_value(env, server->on_connection, &on_connection);
   assert(err == 0);
 
   js_call_function(env, ctx, on_connection, 0, NULL, NULL);
@@ -248,7 +257,7 @@ on_new_connection (uv_stream_t *server, int status) {
 }
 
 static js_value_t *
-bare_http_init (js_env_t *env, js_callback_info_t *info) {
+bare_http1_init (js_env_t *env, js_callback_info_t *info) {
   int err;
 
   size_t argc = 8;
@@ -259,8 +268,8 @@ bare_http_init (js_env_t *env, js_callback_info_t *info) {
 
   assert(argc == 8);
 
-  bare_http_server_t *self;
-  err = js_get_typedarray_info(env, argv[0], NULL, (void **) &self, NULL, NULL, NULL);
+  bare_http1_server_t *server;
+  err = js_get_typedarray_info(env, argv[0], NULL, (void **) &server, NULL, NULL, NULL);
   assert(err == 0);
 
   size_t read_buf_len;
@@ -268,39 +277,39 @@ bare_http_init (js_env_t *env, js_callback_info_t *info) {
   err = js_get_typedarray_info(env, argv[1], NULL, &read_buf, &read_buf_len, NULL, NULL);
   assert(err == 0);
 
-  self->env = env;
-  self->read_buf = read_buf;
-  self->read_buf_len = read_buf_len;
+  server->env = env;
+  server->read_buf = read_buf;
+  server->read_buf_len = read_buf_len;
 
   uv_loop_t *loop;
   js_get_env_loop(env, &loop);
 
-  err = uv_tcp_init(loop, &self->tcp);
+  err = uv_tcp_init(loop, &server->tcp);
   assert(err == 0);
 
-  err = js_create_reference(env, argv[2], 1, &self->ctx);
+  err = js_create_reference(env, argv[2], 1, &server->ctx);
   assert(err == 0);
 
-  err = js_create_reference(env, argv[3], 1, &self->on_connection);
+  err = js_create_reference(env, argv[3], 1, &server->on_connection);
   assert(err == 0);
 
-  err = js_create_reference(env, argv[4], 1, &self->on_read);
+  err = js_create_reference(env, argv[4], 1, &server->on_read);
   assert(err == 0);
 
-  err = js_create_reference(env, argv[5], 1, &self->on_write);
+  err = js_create_reference(env, argv[5], 1, &server->on_write);
   assert(err == 0);
 
-  err = js_create_reference(env, argv[6], 1, &self->on_close);
+  err = js_create_reference(env, argv[6], 1, &server->on_close);
   assert(err == 0);
 
-  err = js_create_reference(env, argv[7], 1, &self->on_server_close);
+  err = js_create_reference(env, argv[7], 1, &server->on_server_close);
   assert(err == 0);
 
   return NULL;
 }
 
 static js_value_t *
-bare_http_bind (js_env_t *env, js_callback_info_t *info) {
+bare_http1_bind (js_env_t *env, js_callback_info_t *info) {
   int err;
 
   size_t argc = 3;
@@ -311,8 +320,8 @@ bare_http_bind (js_env_t *env, js_callback_info_t *info) {
 
   assert(argc == 3);
 
-  bare_http_server_t *self;
-  err = js_get_typedarray_info(env, argv[0], NULL, (void **) &self, NULL, NULL, NULL);
+  bare_http1_server_t *server;
+  err = js_get_typedarray_info(env, argv[0], NULL, (void **) &server, NULL, NULL, NULL);
   assert(err == 0);
 
   uint32_t port;
@@ -333,7 +342,7 @@ bare_http_bind (js_env_t *env, js_callback_info_t *info) {
     return NULL;
   }
 
-  err = uv_tcp_bind(&(self->tcp), (struct sockaddr *) &addr, 0);
+  err = uv_tcp_bind(&(server->tcp), (struct sockaddr *) &addr, 0);
   if (err < 0) {
     js_throw_error(env, uv_err_name(err), uv_strerror(err));
     return NULL;
@@ -341,7 +350,7 @@ bare_http_bind (js_env_t *env, js_callback_info_t *info) {
 
   struct sockaddr_storage name;
 
-  err = uv_tcp_getsockname(&(self->tcp), (struct sockaddr *) &name, &addr_len);
+  err = uv_tcp_getsockname(&(server->tcp), (struct sockaddr *) &name, &addr_len);
   if (err < 0) {
     js_throw_error(env, uv_err_name(err), uv_strerror(err));
     return NULL;
@@ -349,7 +358,7 @@ bare_http_bind (js_env_t *env, js_callback_info_t *info) {
 
   int local_port = ntohs(((struct sockaddr_in *) &name)->sin_port);
 
-  err = uv_listen((uv_stream_t *) &(self->tcp), 128, on_new_connection);
+  err = uv_listen((uv_stream_t *) &(server->tcp), 128, bare_http1__on_connection);
   if (err < 0) {
     js_throw_error(env, uv_err_name(err), uv_strerror(err));
     return NULL;
@@ -363,7 +372,7 @@ bare_http_bind (js_env_t *env, js_callback_info_t *info) {
 }
 
 static js_value_t *
-bare_http_close (js_env_t *env, js_callback_info_t *info) {
+bare_http1_close (js_env_t *env, js_callback_info_t *info) {
   int err;
 
   size_t argc = 1;
@@ -374,17 +383,17 @@ bare_http_close (js_env_t *env, js_callback_info_t *info) {
 
   assert(argc == 1);
 
-  bare_http_server_t *self;
-  err = js_get_typedarray_info(env, argv[0], NULL, (void **) &self, NULL, NULL, NULL);
+  bare_http1_server_t *server;
+  err = js_get_typedarray_info(env, argv[0], NULL, (void **) &server, NULL, NULL, NULL);
   assert(err == 0);
 
-  uv_close((uv_handle_t *) self, on_server_close);
+  uv_close((uv_handle_t *) server, bare_http1__on_server_close);
 
   return NULL;
 }
 
 static js_value_t *
-bare_http_ref (js_env_t *env, js_callback_info_t *info) {
+bare_http1_ref (js_env_t *env, js_callback_info_t *info) {
   int err;
 
   size_t argc = 1;
@@ -395,17 +404,17 @@ bare_http_ref (js_env_t *env, js_callback_info_t *info) {
 
   assert(argc == 1);
 
-  bare_http_server_t *self;
-  err = js_get_typedarray_info(env, argv[0], NULL, (void **) &self, NULL, NULL, NULL);
+  bare_http1_server_t *server;
+  err = js_get_typedarray_info(env, argv[0], NULL, (void **) &server, NULL, NULL, NULL);
   assert(err == 0);
 
-  uv_ref((uv_handle_t *) self);
+  uv_ref((uv_handle_t *) server);
 
   return NULL;
 }
 
 static js_value_t *
-bare_http_unref (js_env_t *env, js_callback_info_t *info) {
+bare_http1_unref (js_env_t *env, js_callback_info_t *info) {
   int err;
 
   size_t argc = 1;
@@ -416,17 +425,17 @@ bare_http_unref (js_env_t *env, js_callback_info_t *info) {
 
   assert(argc == 1);
 
-  bare_http_server_t *self;
-  err = js_get_typedarray_info(env, argv[0], NULL, (void **) &self, NULL, NULL, NULL);
+  bare_http1_server_t *server;
+  err = js_get_typedarray_info(env, argv[0], NULL, (void **) &server, NULL, NULL, NULL);
   assert(err == 0);
 
-  uv_unref((uv_handle_t *) self);
+  uv_unref((uv_handle_t *) server);
 
   return NULL;
 }
 
 static js_value_t *
-bare_http_accept (js_env_t *env, js_callback_info_t *info) {
+bare_http1_accept (js_env_t *env, js_callback_info_t *info) {
   int err;
 
   size_t argc = 2;
@@ -435,11 +444,11 @@ bare_http_accept (js_env_t *env, js_callback_info_t *info) {
   err = js_get_callback_info(env, info, &argc, argv, NULL, NULL);
   assert(err == 0);
 
-  bare_http_server_t *server;
+  bare_http1_server_t *server;
   err = js_get_typedarray_info(env, argv[0], NULL, (void **) &server, NULL, NULL, NULL);
   assert(err == 0);
 
-  bare_http_connection_t *client;
+  bare_http1_connection_t *client;
   err = js_get_typedarray_info(env, argv[1], NULL, (void **) &client, NULL, NULL, NULL);
   assert(err == 0);
 
@@ -451,17 +460,19 @@ bare_http_accept (js_env_t *env, js_callback_info_t *info) {
 
   client->server = server;
 
-  if (uv_accept((uv_stream_t *) server, (uv_stream_t *) client) == 0) {
-    uv_read_start((uv_stream_t *) client, on_alloc_buffer, on_read);
+  err = uv_accept((uv_stream_t *) server, (uv_stream_t *) client);
+
+  if (err == 0) {
+    uv_read_start((uv_stream_t *) client, bare_http1__on_alloc_buffer, bare_http1__on_read);
   } else {
-    uv_close((uv_handle_t *) client, on_connection_close);
+    uv_close((uv_handle_t *) client, bare_http1__on_connection_close);
   }
 
   return NULL;
 }
 
 static js_value_t *
-bare_http_connection_write (js_env_t *env, js_callback_info_t *info) {
+bare_http1_connection_write (js_env_t *env, js_callback_info_t *info) {
   int err;
 
   size_t argc = 3;
@@ -472,8 +483,8 @@ bare_http_connection_write (js_env_t *env, js_callback_info_t *info) {
 
   assert(argc == 3);
 
-  bare_http_connection_t *conn;
-  err = js_get_typedarray_info(env, argv[0], NULL, (void **) &conn, NULL, NULL, NULL);
+  bare_http1_connection_t *connection;
+  err = js_get_typedarray_info(env, argv[0], NULL, (void **) &connection, NULL, NULL, NULL);
   assert(err == 0);
 
   uv_write_t *req;
@@ -498,9 +509,9 @@ bare_http_connection_write (js_env_t *env, js_callback_info_t *info) {
     assert(err == 0);
   }
 
-  req->data = conn;
+  req->data = connection;
 
-  err = uv_write(req, (uv_stream_t *) conn, bufs, bufs_len, on_write);
+  err = uv_write(req, (uv_stream_t *) connection, bufs, bufs_len, bare_http1__on_write);
   assert(err == 0);
 
   free(bufs);
@@ -509,7 +520,7 @@ bare_http_connection_write (js_env_t *env, js_callback_info_t *info) {
 }
 
 static js_value_t *
-bare_http_connection_shutdown (js_env_t *env, js_callback_info_t *info) {
+bare_http1_connection_shutdown (js_env_t *env, js_callback_info_t *info) {
   int err;
 
   size_t argc = 2;
@@ -520,24 +531,24 @@ bare_http_connection_shutdown (js_env_t *env, js_callback_info_t *info) {
 
   assert(argc == 2);
 
-  bare_http_connection_t *conn;
-  err = js_get_typedarray_info(env, argv[0], NULL, (void **) &conn, NULL, NULL, NULL);
+  bare_http1_connection_t *connection;
+  err = js_get_typedarray_info(env, argv[0], NULL, (void **) &connection, NULL, NULL, NULL);
   assert(err == 0);
 
   uv_shutdown_t *req;
   err = js_get_typedarray_info(env, argv[1], NULL, (void **) &req, NULL, NULL, NULL);
   assert(err == 0);
 
-  req->data = conn;
+  req->data = connection;
 
-  err = uv_shutdown(req, (uv_stream_t *) conn, on_shutdown);
+  err = uv_shutdown(req, (uv_stream_t *) connection, bare_http1__on_shutdown);
   assert(err == 0);
 
   return NULL;
 }
 
 static js_value_t *
-bare_http_connection_close (js_env_t *env, js_callback_info_t *info) {
+bare_http1_connection_close (js_env_t *env, js_callback_info_t *info) {
   int err;
 
   size_t argc = 1;
@@ -548,11 +559,11 @@ bare_http_connection_close (js_env_t *env, js_callback_info_t *info) {
 
   assert(argc == 1);
 
-  bare_http_connection_t *conn;
-  err = js_get_typedarray_info(env, argv[0], NULL, (void **) &conn, NULL, NULL, NULL);
+  bare_http1_connection_t *connection;
+  err = js_get_typedarray_info(env, argv[0], NULL, (void **) &connection, NULL, NULL, NULL);
   assert(err == 0);
 
-  uv_close((uv_handle_t *) conn, on_connection_close);
+  uv_close((uv_handle_t *) connection, bare_http1__on_connection_close);
 
   return NULL;
 }
@@ -561,12 +572,12 @@ static js_value_t *
 init (js_env_t *env, js_value_t *exports) {
   {
     js_value_t *val;
-    js_create_uint32(env, sizeof(bare_http_server_t), &val);
+    js_create_uint32(env, sizeof(bare_http1_server_t), &val);
     js_set_named_property(env, exports, "sizeofServer", val);
   }
   {
     js_value_t *val;
-    js_create_uint32(env, sizeof(bare_http_connection_t), &val);
+    js_create_uint32(env, sizeof(bare_http1_connection_t), &val);
     js_set_named_property(env, exports, "sizeofConnection", val);
   }
   {
@@ -581,56 +592,56 @@ init (js_env_t *env, js_value_t *exports) {
   }
   {
     js_value_t *val;
-    js_create_uint32(env, offsetof(bare_http_connection_t, id), &val);
+    js_create_uint32(env, offsetof(bare_http1_connection_t, id), &val);
     js_set_named_property(env, exports, "offsetofConnectionID", val);
   }
   {
     js_value_t *fn;
-    js_create_function(env, "init", -1, bare_http_init, NULL, &fn);
+    js_create_function(env, "init", -1, bare_http1_init, NULL, &fn);
     js_set_named_property(env, exports, "init", fn);
   }
   {
     js_value_t *fn;
-    js_create_function(env, "bind", -1, bare_http_bind, NULL, &fn);
+    js_create_function(env, "bind", -1, bare_http1_bind, NULL, &fn);
     js_set_named_property(env, exports, "bind", fn);
   }
   {
     js_value_t *fn;
-    js_create_function(env, "accept", -1, bare_http_accept, NULL, &fn);
+    js_create_function(env, "accept", -1, bare_http1_accept, NULL, &fn);
     js_set_named_property(env, exports, "accept", fn);
   }
   {
     js_value_t *fn;
-    js_create_function(env, "close", -1, bare_http_close, NULL, &fn);
+    js_create_function(env, "close", -1, bare_http1_close, NULL, &fn);
     js_set_named_property(env, exports, "close", fn);
   }
   {
     js_value_t *fn;
-    js_create_function(env, "ref", -1, bare_http_ref, NULL, &fn);
+    js_create_function(env, "ref", -1, bare_http1_ref, NULL, &fn);
     js_set_named_property(env, exports, "ref", fn);
   }
   {
     js_value_t *fn;
-    js_create_function(env, "unref", -1, bare_http_unref, NULL, &fn);
+    js_create_function(env, "unref", -1, bare_http1_unref, NULL, &fn);
     js_set_named_property(env, exports, "unref", fn);
   }
   {
     js_value_t *fn;
-    js_create_function(env, "connectionWrite", -1, bare_http_connection_write, NULL, &fn);
+    js_create_function(env, "connectionWrite", -1, bare_http1_connection_write, NULL, &fn);
     js_set_named_property(env, exports, "connectionWrite", fn);
   }
   {
     js_value_t *fn;
-    js_create_function(env, "connectionShutdown", -1, bare_http_connection_shutdown, NULL, &fn);
+    js_create_function(env, "connectionShutdown", -1, bare_http1_connection_shutdown, NULL, &fn);
     js_set_named_property(env, exports, "connectionShutdown", fn);
   }
   {
     js_value_t *fn;
-    js_create_function(env, "connectionClose", -1, bare_http_connection_close, NULL, &fn);
+    js_create_function(env, "connectionClose", -1, bare_http1_connection_close, NULL, &fn);
     js_set_named_property(env, exports, "connectionClose", fn);
   }
 
   return exports;
 }
 
-BARE_MODULE(bare_http, init)
+BARE_MODULE(bare_http1, init)
