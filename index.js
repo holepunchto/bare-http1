@@ -66,9 +66,12 @@ class HTTPSocket {
     this._server = server
     this._socket = socket
     this._requests = new Set()
+    this._responses = new Set()
     this._buffer = null
 
-    this._socket.on('data', this._ondata.bind(this))
+    this._socket
+      .on('data', this._ondata.bind(this))
+      .on('drain', this._ondrain.bind(this))
   }
 
   _ondata (data) {
@@ -121,10 +124,18 @@ class HTTPSocket {
     const res = new ServerResponse(this._socket, req, headers.connection === 'close')
 
     this._requests.add(req)
+    this._responses.add(res)
 
-    req.on('close', () => this._requests.delete(req))
+    req.on('close', () => {
+      this._requests.delete(req)
+      this._responses.delete(res)
+    })
 
     this._server.emit('request', req, res)
+  }
+
+  _ondrain () {
+    for (const res of this._responses) res._continueWrite()
   }
 }
 
@@ -281,8 +292,6 @@ const ServerResponse = exports.ServerResponse = class ServerResponse extends Out
     this._onlyHeaders = req.method === 'HEAD'
 
     this._pendingWrite = null
-
-    socket.on('drain', () => this._continueWrite())
   }
 
   end (data) {
