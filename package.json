@@ -2,12 +2,17 @@
   "name": "bare-http1",
   "version": "2.0.5",
   "description": "Native HTTP/1 library for JavaScript",
-  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./package": "./package.json",
+    "./constants": "./lib/constants.js"
+  },
   "files": [
     "index.js",
     "binding.c",
     "binding.js",
     "CMakeLists.txt",
+    "lib",
     "prebuilds"
   ],
   "addon": true,
