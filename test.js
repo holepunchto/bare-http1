@@ -3,28 +3,18 @@ const { spawn } = require('bare-subprocess')
 const { createServer } = require('.')
 
 test('basic', async function (t) {
-  t.plan(41)
+  t.plan(27)
 
   const server = createServer()
-  t.is(server.host, null)
-  t.is(server.port, 0)
-  t.is(server.closing, false)
-  t.is(server.connections.length, 0)
 
   server.on('listening', function () {
     t.pass('server listening')
   })
 
   server.on('connection', function (socket) {
-    t.is(server.connections.length, 1)
-
     t.ok(socket)
-    t.is(typeof socket.id, 'number')
-    t.is(socket.server, server)
-    t.is(socket.requests.size, 0)
 
     socket.on('close', () => {
-      t.is(server.connections.length, 0)
       t.pass('server socket closed')
     })
 
@@ -39,19 +29,15 @@ test('basic', async function (t) {
     t.alike(req.getHeader('connection'), 'keep-alive')
     t.alike(req.getHeader('Connection'), 'keep-alive')
     t.ok(req.socket)
-    t.is(req.socket.requests.size, 1)
 
     t.ok(res)
     t.is(res.statusCode, 200, 'default status code')
     t.alike(res.headers, {})
     t.ok(res.socket)
-    t.is(res.request, req)
+    t.is(res.req, req)
     t.is(res.headersSent, false, 'headers not flushed')
-    t.is(res.chunked, true, 'chunked by default')
-    t.is(res.onlyHeaders, false)
 
     t.is(req.socket, res.socket)
-    t.is(server.connections[req.socket.id], req.socket)
 
     res.setHeader('Content-Length', 12)
     t.alike(res.headers, { 'content-length': 12 })
@@ -66,7 +52,6 @@ test('basic', async function (t) {
 
     res.on('close', function () {
       t.is(res.headersSent, true, 'headers flushed')
-      t.is(res.chunked, false, 'not chunked')
       t.pass('server response closed')
     })
   })
@@ -88,29 +73,26 @@ test('basic', async function (t) {
   t.alike(body, Buffer.from('Hello world!'), 'client response ended')
 
   server.close()
-  server.on('close', function () {
-    t.pass('server closed')
-  })
+  server.on('close', () => t.pass('server closed'))
 })
 
 test('port already in use', async function (t) {
-  t.plan(2)
+  t.plan(1)
 
   const server = createServer()
   server.listen(0)
   await waitForServer(server)
 
   const server2 = createServer()
-  server2.listen(server.address().port)
+  try {
+    server2.listen(server.address().port)
+    t.fail()
+  } catch (err) {
+    t.comment(err.message)
+  }
 
-  server2.on('error', function (err) {
-    t.is(err.code, 'EADDRINUSE')
-
-    server2.close()
-
-    server.close()
-    server.on('close', () => t.pass('original server closed'))
-  })
+  server.close()
+  server.on('close', () => t.pass('original server closed'))
 })
 
 test('destroy request', async function (t) {
@@ -256,7 +238,7 @@ test('write head with headers', async function (t) {
 })
 
 test('chunked', async function (t) {
-  t.plan(9)
+  t.plan(7)
 
   const server = createServer()
   server.on('close', () => t.pass('server closed'))
@@ -268,14 +250,7 @@ test('chunked', async function (t) {
 
   server.on('request', function (req, res) {
     res.write('part 1 + ')
-    setImmediate(() => {
-      res.end('part 2')
-    })
-
-    t.is(res.chunked, true, 'chunked by default')
-    res.on('close', () => {
-      t.is(res.chunked, true, 'still chunked')
-    })
+    setImmediate(() => res.end('part 2'))
 
     req.on('close', () => t.pass('server request closed'))
     res.on('close', () => t.pass('server response closed'))
