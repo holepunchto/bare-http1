@@ -1,6 +1,6 @@
 const EventEmitter = require('bare-events')
-const stream = require('streamx')
-const binding = require('./binding')
+const tcp = require('bare-tcp')
+const { Writable, Readable } = require('streamx')
 
 const STATUS_CODES = new Map([
   [100, 'Continue'],
@@ -61,64 +61,27 @@ const STATUS_CODES = new Map([
   [511, 'Network Authentication Required']
 ])
 
-class Socket extends stream.Writable {
-  constructor (server, id) {
-    super()
+class HTTPSocket {
+  constructor (server, socket) {
+    this._server = server
+    this._socket = socket
+    this._requests = new Set()
+    this._buffer = null
 
-    const buf = Buffer.alloc(binding.sizeofConnection + binding.sizeofWrite + binding.sizeofShutdown)
-
-    this.id = id
-    this.server = server
-
-    let pos = 0
-
-    this.handle = buf.subarray(pos, pos += binding.sizeofConnection)
-    this.writeRequest = buf.subarray(pos, pos += binding.sizeofWrite)
-    this.shutdownRequest = buf.subarray(pos, pos += binding.sizeofShutdown)
-
-    this.callback = null
-
-    this.view = new Uint32Array(this.handle.buffer, this.handle.byteOffset + binding.offsetofConnectionID, 1)
-    this.view[0] = id
-
-    this.buffer = null
-    this.requests = new Set()
+    this._socket.on('data', this._ondata.bind(this))
   }
 
-  _writev (data, callback) {
-    this.callback = callback
-    binding.connectionWrite(this.handle, this.writeRequest, data)
-  }
-
-  _final (callback) {
-    this.callback = callback
-    binding.connectionShutdown(this.handle, this.shutdownRequest)
-  }
-
-  _destroy (callback) {
-    for (const req of this.requests) req.destroy()
-    this.callback = callback
-    binding.connectionClose(this.handle)
-  }
-
-  oncallback (status) {
-    const callback = this.callback
-    if (callback === null) return
-    this.callback = null
-    callback(status !== 0 ? new Error('Socket destroyed') : null)
-  }
-
-  ondata (data) {
-    if (this.buffer !== null) {
-      this.buffer = Buffer.concat([this.buffer, data])
+  _ondata (data) {
+    if (this._buffer !== null) {
+      this._buffer = Buffer.concat([this._buffer, data])
     } else {
-      this.buffer = data
+      this._buffer = data
     }
 
     let hits = 0
 
-    for (let i = 0; i < this.buffer.byteLength; i++) {
-      const b = this.buffer[i]
+    for (let i = 0; i < this._buffer.byteLength; i++) {
+      const b = this._buffer[i]
 
       if (hits === 0 && b === 13) {
         hits++
@@ -129,171 +92,116 @@ class Socket extends stream.Writable {
       } else if (hits === 3 && b === 10) {
         hits = 0
 
-        const head = this.buffer.subarray(0, i + 1)
-        this.buffer = i + 1 === this.buffer.byteLength ? null : this.buffer.subarray(i + 1)
-        this.onrequest(head)
+        const head = this._buffer.subarray(0, i + 1)
+        this._buffer = i + 1 === this._buffer.byteLength ? null : this._buffer.subarray(i + 1)
+        this._onrequest(head)
 
-        if (this.buffer === null) break
+        if (this._buffer === null) break
       } else {
         hits = 0
       }
     }
   }
 
-  onrequest (head) {
-    const r = Buffer.coerce(head).toString().trim().split('\r\n')
-
-    if (r.length === 0) return this.destroy()
+  _onrequest (head) {
+    const r = head.toString().trim().split('\r\n')
+    if (r.length === 0) return this._socket.destroy()
 
     const [method, url] = r[0].split(' ')
-    if (!method || !url) return this.destroy()
+    if (!method || !url) return this._socket.destroy()
 
     const headers = {}
+
     for (let i = 1; i < r.length; i++) {
       const [name, value] = r[i].split(': ')
       headers[name.toLowerCase()] = value
     }
 
-    const req = new Request(this, method, url, headers)
-    const res = new Response(this, req, headers.connection === 'close')
+    const req = new IncomingMessage(this._socket, method, url, headers)
+    const res = new ServerResponse(this._socket, req, headers.connection === 'close')
 
-    this.requests.add(req)
-    req.on('close', () => this.requests.delete(req))
+    this._requests.add(req)
 
-    this.server.emit('request', req, res)
+    req.on('close', () => this._requests.delete(req))
+
+    this._server.emit('request', req, res)
   }
 }
 
-module.exports = class Server extends EventEmitter {
+exports.Server = class HTTPServer extends EventEmitter {
   constructor (onrequest) {
     super()
 
-    this.handle = Buffer.alloc(binding.sizeofServer)
-    this.buffer = Buffer.allocUnsafe(65536)
-    this.host = null
-    this.port = 0
-    this.closing = false
-
-    this.connections = []
-
-    binding.init(this.handle, this.buffer, this,
-      this._onconnection,
-      this._onread,
-      this._onwrite,
-      this._onclose,
-      this._onserverclose
-    )
+    this._server = new tcp.Server(this._onconnection.bind(this))
+    this._connections = new Set()
 
     if (onrequest) this.on('request', onrequest)
   }
 
-  _onconnection () {
-    const id = this.connections.push(null) - 1
-    const c = new Socket(this, id)
-
-    this.connections[c.id] = c
-
-    c.on('error', noop)
-    c.on('close', () => {
-      const last = this.connections.pop()
-      if (last !== c) this.connections[last.view[0] = last.id = c.id] = last
-      else if (this.closing && this.connections.length === 0) binding.close(this.handle)
-    })
-
-    binding.accept(this.handle, c.handle)
-
-    this.emit('connection', c)
-  }
-
-  _onread (id, read) {
-    const c = this.connections[id]
-
-    if (read < 0) c.destroy()
-    else if (read === 0 && c.requests.size === 0) c.destroy()
-    else if (read > 0) c.ondata(this.buffer.subarray(0, read))
-  }
-
-  _onwrite (id, status) {
-    const c = this.connections[id]
-
-    c.oncallback(status)
-  }
-
-  _onclose (id) {
-    const c = this.connections[id]
-
-    c.oncallback(0)
-  }
-
-  _onserverclose () {
-    this.host = null
-    this.port = null
-    this.emit('close')
-  }
-
-  static createServer (onrequest) {
-    return new Server(onrequest)
-  }
-
   close (onclose) {
-    if (onclose) this.once('close', onclose)
-    if (this.closing) return
-    this.closing = true
-    if (this.connections.length === 0) binding.close(this.handle)
+    this._server.close(onclose)
   }
 
   address () {
-    if (!this.host) throw new Error('Server is not bound')
-
-    return { address: this.host, family: 4, port: this.port }
+    return this._server.address()
   }
 
-  listen (port, host, onlistening) {
-    if (typeof port === 'function') return this.listen(0, null, port)
-    if (typeof host === 'function') return this.listen(port, null, host)
-
-    if (this.host) throw new Error('Server is already bound')
-    if (this.closing) throw new Error('Server is closed')
-
-    if (onlistening) this.once('listening', onlistening)
-
-    if (!host) host = '0.0.0.0'
+  listen (port, host = '0.0.0.0', onlistening) {
+    if (typeof port === 'function') {
+      onlistening = port
+      port = 0
+    } else if (typeof host === 'function') {
+      onlistening = host
+      host = '0.0.0.0'
+    }
 
     try {
-      this.port = binding.bind(this.handle, port, host)
-      this.host = host
+      this._server.listen(port, host, this._onlistening.bind(this))
     } catch (err) {
       queueMicrotask(() => {
-        if (!this.closing) this.emit('error', err) // silly but node compat
+        this.emit('error', err) // For Node.js compatibility
       })
 
       return this
     }
 
-    queueMicrotask(() => {
-      if (this.host) this.emit('listening')
-    })
+    if (onlistening) this.once('listening', onlistening)
 
     return this
   }
 
   ref () {
-    binding.ref(this.handle)
+    this._server.ref()
   }
 
   unref () {
-    binding.unref(this.handle)
+    this._server.unref()
+  }
+
+  _onconnection (socket) {
+    const connection = new HTTPSocket(this, socket)
+
+    this._connections.add(connection)
+
+    socket.on('close', () => this._connections.delete(connection))
+
+    this.emit('connection', socket)
+  }
+
+  _onlistening () {
+    this.emit('listening')
   }
 }
 
-class Request extends stream.Readable {
+const IncomingMessage = exports.IncomingMessage = class IncomingMessage extends Readable {
   constructor (socket, method, url, headers) {
     super()
 
+    this.socket = socket
     this.method = method
     this.url = url
     this.headers = headers
-    this.socket = socket
+
     this.push(null)
   }
 
@@ -301,59 +209,116 @@ class Request extends stream.Readable {
     return this.headers[name.toLowerCase()]
   }
 
+  getHeaders () {
+    return { ...this.headers }
+  }
+
   _predestroy () {
     this.socket.destroy()
   }
 }
 
-class Response extends stream.Writable {
-  constructor (socket, request, close) {
+const OutgoingMessage = exports.OutgoingMessage = class OutgoingMessage extends Writable {
+  constructor (socket) {
     super({ map: mapToBuffer })
 
-    this.statusCode = 200
-    this.headers = {}
     this.socket = socket
-    this.request = request
+    this.statusCode = 200
+    this.statusMessage = null
+    this.headers = {}
     this.headersSent = false
-    this.chunked = true
-    this.close = close
-    this.ondrain = null
-    this.finishing = false
-    this.onlyHeaders = this.request.method === 'HEAD'
-
-    socket.on('drain', () => this._writeContinue())
   }
 
-  writeHead (statusCode, headers) {
-    this.statusCode = statusCode
-    this.headers = headers || {}
+  getHeader (name) {
+    return this.headers[name.toLowerCase()]
   }
 
-  _writeContinue () {
-    const ondrain = this.ondrain
-    if (ondrain === null) return
-    this.ondrain = null
-    ondrain(null)
+  getHeaders () {
+    return { ...this.headers }
+  }
+
+  setHeader (name, value) {
+    this.headers[name.toLowerCase()] = value
+  }
+
+  flushHeaders () {
+    if (this.headersSent === true) return
+
+    let h = 'HTTP/1.1 ' + this.statusCode + ' ' + (this.statusMessage === null ? STATUS_CODES.get(this.statusCode) : this.statusMessage) + '\r\n'
+
+    for (const name of Object.keys(this.headers)) {
+      const n = name.toLowerCase()
+      const v = this.headers[name]
+
+      if (n === 'content-length') this._chunked = false
+      if (n === 'connection' && v === 'close') this._close = true
+
+      h += httpCase(n) + ': ' + v + '\r\n'
+    }
+
+    if (this._chunked) h += 'Transfer-Encoding: chunked\r\n'
+
+    h += '\r\n'
+
+    this.socket.write(Buffer.from(h))
+    this.headersSent = true
   }
 
   _predestroy () {
-    this.request.destroy()
     this.socket.destroy()
-    this._writeContinue()
+  }
+}
+
+const ServerResponse = exports.ServerResponse = class ServerResponse extends OutgoingMessage {
+  constructor (socket, req, close) {
+    super(socket)
+
+    this.req = req
+
+    this._chunked = true
+    this._close = close
+    this._finishing = false
+    this._onlyHeaders = req.method === 'HEAD'
+
+    this._pendingWrite = null
+
+    socket.on('drain', () => this._continueWrite())
   }
 
-  _write (data, callback) {
+  end (data) {
+    this._finishing = true
+    return super.end(data)
+  }
+
+  writeHead (statusCode, statusMessage = null, headers = {}) {
+    if (typeof statusMessage !== 'string') {
+      headers = statusMessage
+      statusMessage = {}
+    }
+
+    this.statusCode = statusCode
+    this.statusMessage = statusMessage
+    this.headers = headers
+  }
+
+  _predestroy () {
+    super._predestroy()
+    this.req.destroy()
+    this._continueWrite()
+  }
+
+  _write (data, cb) {
     if (this.headersSent === false) {
-      if (this.finishing) {
-        const bytes = data.byteLength + this._writableState.buffered
-        this.setHeader('Content-Length', '' + bytes)
+      if (this._finishing) {
+        this.setHeader('Content-Length', (data.byteLength + this._writableState.buffered).toString())
       }
+
       this.flushHeaders()
     }
 
-    if (this.onlyHeaders === true) return callback(null)
+    if (this._onlyHeaders === true) return cb(null)
 
-    if (this.chunked) {
+    if (this._chunked) {
       data = Buffer.concat([
         Buffer.from('' + data.byteLength.toString(16) + '\r\n'),
         data,
@@ -361,58 +326,32 @@ class Response extends stream.Writable {
       ])
     }
 
-    if (this.socket.write(data) === false) {
-      this.ondrain = callback
-      return
-    }
-
-    callback(null)
+    if (this.socket.write(data)) cb(null)
+    else this._pendingWrite = cb
   }
 
-  _final (callback) {
+  _final (cb) {
     if (this.headersSent === false) {
       this.setHeader('Content-Length', '0')
       this.flushHeaders()
     }
 
-    if (this.chunked && this.onlyHeaders === false) this.socket.write(Buffer.from('0\r\n\r\n'))
-    if (this.close) this.socket.end()
+    if (this._chunked && this._onlyHeaders === false) this.socket.write(Buffer.from('0\r\n\r\n'))
+    if (this._close) this.socket.end()
 
-    callback(null)
+    cb(null)
   }
 
-  end (data) {
-    this.finishing = true
-    return super.end(data)
+  _continueWrite () {
+    if (this._pendingWrite === null) return
+    const cb = this._pendingWrite
+    this._pendingWrite = null
+    cb(null)
   }
+}
 
-  setHeader (name, value) {
-    this.headers[name.toLowerCase()] = value
-  }
-
-  getHeader (name) {
-    return this.headers[name.toLowerCase()]
-  }
-
-  flushHeaders () {
-    if (this.headersSent === true) return
-
-    let h = 'HTTP/1.1 ' + this.statusCode + ' ' + STATUS_CODES.get(this.statusCode) + '\r\n'
-    for (const name of Object.keys(this.headers)) {
-      const n = name.toLowerCase()
-      const v = this.headers[name]
-
-      if (n === 'content-length') this.chunked = false
-      if (n === 'connection' && v === 'close') this.close = true
-
-      h += httpCase(n) + ': ' + v + '\r\n'
-    }
-    if (this.chunked) h += 'Transfer-Encoding: chunked\r\n'
-    h += '\r\n'
-
-    this.socket.write(Buffer.from(h))
-    this.headersSent = true
-  }
+exports.createServer = function createServer (onrequest) {
+  return new exports.Server(onrequest)
 }
 
 function httpCase (n) {
@@ -422,8 +361,6 @@ function httpCase (n) {
   }
   return s
 }
-
-function noop () {}
 
 function mapToBuffer (b) {
   return typeof b === 'string' ? Buffer.from(b) : b
