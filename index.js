@@ -3,6 +3,7 @@ exports.OutgoingMessage = require('./lib/outgoing-message')
 
 const Server = exports.Server = require('./lib/server')
 exports.ServerResponse = require('./lib/server-response')
+exports.ServerConnection = require('./lib/server-connection')
 
 exports.constants = require('./lib/constants')
 
