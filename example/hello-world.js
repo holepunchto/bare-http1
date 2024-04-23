@@ -8,9 +8,9 @@ const server = http.createServer(function (req, res) {
 })
 
 server.on('connection', function (socket) {
-  console.log('got socket', server.connections.length)
+  console.log('got socket')
   socket.on('close', function () {
-    console.log('closed socket', server.connections.length)
+    console.log('closed socket')
   })
 })
 
