@@ -9,11 +9,7 @@
   },
   "files": [
     "index.js",
-    "binding.c",
-    "binding.js",
-    "CMakeLists.txt",
-    "lib",
-    "prebuilds"
+    "lib"
   ],
   "addon": true,
   "scripts": {
