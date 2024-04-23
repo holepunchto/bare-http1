@@ -8,5 +8,5 @@ const server = http.createServer(function (req, res) {
 })
 
 server.listen(8080, function () {
-  console.log('server is bound on', server.address().port)
+  console.log(server.address())
 })
