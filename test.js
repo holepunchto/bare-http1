@@ -77,22 +77,20 @@ test('basic', async function (t) {
 })
 
 test('port already in use', async function (t) {
-  t.plan(1)
+  t.plan(2)
 
   const server = createServer()
   server.listen(0)
   await waitForServer(server)
 
   const server2 = createServer()
-  try {
-    server2.listen(server.address().port)
-    t.fail()
-  } catch (err) {
-    t.comment(err.message)
-  }
+  server2.listen(server.address().port)
+  server2.on('error', (err) => {
+    t.is(err.code, 'EADDRINUSE')
 
-  server.close()
-  server.on('close', () => t.pass('original server closed'))
+    server.close()
+    server.on('close', () => t.pass('original server closed'))
+  })
 })
 
 test('destroy request', async function (t) {
