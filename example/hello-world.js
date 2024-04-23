@@ -7,6 +7,13 @@ const server = http.createServer(function (req, res) {
   res.end()
 })
 
-server.listen(0, function () {
-  console.log('server is bound on', server.address().port)
+server.on('connection', function (socket) {
+  console.log('got socket', server.connections.length)
+  socket.on('close', function () {
+    console.log('closed socket', server.connections.length)
+  })
+})
+
+server.listen(8080, function () {
+  console.log(server.address())
 })

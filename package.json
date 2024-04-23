@@ -2,12 +2,17 @@
   "name": "bare-http1",
   "version": "2.0.5",
   "description": "Native HTTP/1 library for JavaScript",
-  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./package": "./package.json",
+    "./constants": "./lib/constants.js"
+  },
   "files": [
     "index.js",
     "binding.c",
     "binding.js",
     "CMakeLists.txt",
+    "lib",
     "prebuilds"
   ],
   "addon": true,
@@ -26,6 +31,7 @@
   "homepage": "https://github.com/holepunchto/bare-http1#readme",
   "dependencies": {
     "bare-events": "^2.0.0",
+    "bare-tcp": "^1.1.2",
     "streamx": "^2.13.0"
   },
   "devDependencies": {
