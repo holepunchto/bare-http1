@@ -6,6 +6,6 @@ exports.ServerResponse = require('./lib/server-response')
 
 exports.constants = require('./lib/constants')
 
-exports.createServer = function createServer (onrequest) {
-  return new Server(onrequest)
+exports.createServer = function createServer (opts, onrequest) {
+  return new Server(opts, onrequest)
 }
