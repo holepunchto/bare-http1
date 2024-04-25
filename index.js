@@ -7,6 +7,8 @@ exports.ServerConnection = require('./lib/server-connection')
 
 exports.constants = require('./lib/constants')
 
+exports.STATUS_CODES = exports.constants.status // For Node.js compatibility
+
 exports.createServer = function createServer (opts, onrequest) {
   return new Server(opts, onrequest)
 }
