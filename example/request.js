@@ -1,6 +1,6 @@
 const http = require('..')
 
-const req = http.request({ port: 8080 }, res => {
+const client = http.request({ port: 8080 }, res => {
   console.log('status:', res.statusCode)
 
   let rawData = ''
@@ -12,4 +12,4 @@ const req = http.request({ port: 8080 }, res => {
     })
 })
 
-req.end()
+client.end()
