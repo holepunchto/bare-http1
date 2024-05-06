@@ -272,8 +272,6 @@ test('chunked', async function (t) {
 
   const body = Buffer.concat(reply.response.chunks)
 
-  console.log('body:', body.toString())
-
   t.alike(body, Buffer.from('part 1 + part 2'), 'client response ended')
 
   server.close()
