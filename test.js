@@ -1,4 +1,4 @@
-const { test, skip } = require('brittle')
+const test = require('brittle')
 // const { spawn } = require('bare-subprocess')
 const { createServer, request } = require('.')
 
@@ -312,7 +312,7 @@ test('destroy socket', async function (t) {
   server.close()
 })
 
-skip('server does a big write', async function (t) {
+test('server does a big write', async function (t) {
   t.plan(7)
 
   const server = createServer()
