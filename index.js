@@ -5,7 +5,7 @@ const Server = exports.Server = require('./lib/server')
 exports.ServerResponse = require('./lib/server-response')
 exports.ServerConnection = require('./lib/server-connection')
 
-const Request = require('./lib/client-request')
+const Request = exports.ClientRequest = require('./lib/client-request')
 
 exports.constants = require('./lib/constants')
 
