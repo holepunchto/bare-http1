@@ -1,5 +1,4 @@
 const test = require('brittle')
-// const { spawn } = require('bare-subprocess')
 const { createServer, request } = require('.')
 
 test('basic', async function (t) {
@@ -26,6 +25,7 @@ test('basic', async function (t) {
     t.is(req.method, 'GET')
     t.is(req.url, '/something/?key1=value1&key2=value2&enabled')
     t.alike(req.headers, { host: server.address().address + ':' + server.address().port })
+    // TODO:
     // t.alike(req.headers, { host: server.address().address + ':' + server.address().port, connection: 'keep-alive' })
     // t.alike(req.getHeader('connection'), 'keep-alive')
     // t.alike(req.getHeader('Connection'), 'keep-alive')
@@ -281,12 +281,12 @@ test('destroy socket', async function (t) {
   t.plan(4)
 
   const server = createServer()
-  server.on('close', () => t.pass('server closed')) // check 4
+  server.on('close', () => t.pass('server closed'))
 
   server.on('connection', function (socket) {
     socket.destroy()
 
-    socket.on('close', () => t.pass('server socket closed')) // check 1
+    socket.on('close', () => t.pass('server socket closed'))
     socket.on('error', (err) => {
       t.fail('server socket error: ' + err.message + ' (' + err.code + ')')
     })
@@ -306,7 +306,7 @@ test('destroy socket', async function (t) {
     path: '/'
   })
 
-  t.absent(reply.response) // check 2
+  t.absent(reply.response)
   t.ok(reply.error, 'had error')
 
   server.close()
@@ -397,53 +397,3 @@ function _request (opts) {
     client.end()
   })
 }
-
-/*
-function __request (opts) {
-  const src = `
-    const http = require('http')
-    const client = http.request(${JSON.stringify(opts)})
-
-    const result = {
-      statusCode: 0,
-      error: null,
-      response: null
-    }
-
-    client.on('error', function (err) {
-      result.error = err.message
-    })
-
-    client.on('response', function (res) {
-      const r = result.response = { statusCode: res.statusCode, headers: res.headers, ended: false, chunks: [] }
-      r.statusCode = res.statusCode
-      res.on('data', (chunk) => r.chunks.push(chunk.toString('hex')))
-      res.on('end', () => {
-        r.ended = true
-      })
-    })
-
-    client.on('close', () => {
-      process.stdout.write(JSON.stringify(result))
-    })
-
-    client.end()
-  `
-
-  const proc = spawn('node', ['-e', src])
-  const all = []
-
-  proc.stdout.on('data', function (data) {
-    all.push(data)
-  })
-
-  return new Promise((resolve, reject) => {
-    proc.on('exit', function (code) {
-      if (code) return reject(new Error('Bad exit: ' + code))
-      const result = JSON.parse(Buffer.concat(all).toString())
-      if (result.response) result.response.chunks = result.response.chunks.map(c => Buffer.from(c, 'hex'))
-      resolve(result)
-    })
-  })
-}
-*/
