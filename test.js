@@ -377,9 +377,7 @@ function request (opts) {
     client.on('response', function (res) {
       const r = result.response = { statusCode: res.statusCode, headers: res.headers, ended: false, chunks: [] }
       r.statusCode = res.statusCode
-      res.on('data', (chunk) => {
-        r.chunks.push(chunk.toString('hex'))
-      })
+      res.on('data', (chunk) => r.chunks.push(chunk))
       res.on('end', () => {
         r.ended = true
       })
