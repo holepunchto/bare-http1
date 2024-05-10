@@ -1,10 +1,10 @@
 const test = require('brittle')
-const { createServer, request } = require('.')
+const http = require('.')
 
 test('basic', async function (t) {
   t.plan(25)
 
-  const server = createServer()
+  const server = http.createServer()
 
   server.on('listening', function () {
     t.pass('server listening')
@@ -60,7 +60,7 @@ test('basic', async function (t) {
   server.listen(0)
   await waitForServer(server)
 
-  const reply = await _request({
+  const reply = await request({
     method: 'GET',
     host: server.address().address,
     port: server.address().port,
@@ -80,11 +80,11 @@ test('basic', async function (t) {
 test('port already in use', async function (t) {
   t.plan(2)
 
-  const server = createServer()
+  const server = http.createServer()
   server.listen(0)
   await waitForServer(server)
 
-  const server2 = createServer()
+  const server2 = http.createServer()
   server2.listen(server.address().port)
   server2.on('error', (err) => {
     t.is(err.code, 'EADDRINUSE')
@@ -97,7 +97,7 @@ test('port already in use', async function (t) {
 test('destroy request', async function (t) {
   t.plan(5)
 
-  const server = createServer()
+  const server = http.createServer()
   server.on('close', () => t.pass('server closed'))
 
   server.on('connection', function (socket) {
@@ -114,7 +114,7 @@ test('destroy request', async function (t) {
   server.listen(0)
   await waitForServer(server)
 
-  const reply = await _request({
+  const reply = await request({
     method: 'GET',
     host: server.address().address,
     port: server.address().port,
@@ -131,7 +131,7 @@ test('destroy request', async function (t) {
 test('destroy response', async function (t) {
   t.plan(6)
 
-  const server = createServer()
+  const server = http.createServer()
   server.on('close', () => t.pass('server closed'))
 
   server.on('connection', function (socket) {
@@ -149,7 +149,7 @@ test('destroy response', async function (t) {
   server.listen(0)
   await waitForServer(server)
 
-  const reply = await _request({
+  const reply = await request({
     method: 'GET',
     host: server.address().address,
     port: server.address().port,
@@ -165,7 +165,7 @@ test('destroy response', async function (t) {
 test('write head', async function (t) {
   t.plan(8)
 
-  const server = createServer()
+  const server = http.createServer()
   server.on('close', () => t.pass('server closed'))
 
   server.on('connection', function (socket) {
@@ -184,7 +184,7 @@ test('write head', async function (t) {
   server.listen(0)
   await waitForServer(server)
 
-  const reply = await _request({
+  const reply = await request({
     method: 'GET',
     host: server.address().address,
     port: server.address().port,
@@ -203,7 +203,7 @@ test('write head', async function (t) {
 test('write head with headers', async function (t) {
   t.plan(9)
 
-  const server = createServer()
+  const server = http.createServer()
   server.on('close', () => t.pass('server closed'))
 
   server.on('connection', function (socket) {
@@ -222,7 +222,7 @@ test('write head with headers', async function (t) {
   server.listen(0)
   await waitForServer(server)
 
-  const reply = await _request({
+  const reply = await request({
     method: 'GET',
     host: server.address().address,
     port: server.address().port,
@@ -241,7 +241,7 @@ test('write head with headers', async function (t) {
 test('chunked', async function (t) {
   t.plan(7)
 
-  const server = createServer()
+  const server = http.createServer()
   server.on('close', () => t.pass('server closed'))
 
   server.on('connection', function (socket) {
@@ -260,7 +260,7 @@ test('chunked', async function (t) {
   server.listen(0)
   await waitForServer(server)
 
-  const reply = await _request({
+  const reply = await request({
     method: 'GET',
     host: server.address().address,
     port: server.address().port,
@@ -280,7 +280,7 @@ test('chunked', async function (t) {
 test('destroy socket', async function (t) {
   t.plan(4)
 
-  const server = createServer()
+  const server = http.createServer()
   server.on('close', () => t.pass('server closed'))
 
   server.on('connection', function (socket) {
@@ -299,7 +299,7 @@ test('destroy socket', async function (t) {
   server.listen(0)
   await waitForServer(server)
 
-  const reply = await _request({
+  const reply = await request({
     method: 'GET',
     host: server.address().address,
     port: server.address().port,
@@ -315,7 +315,7 @@ test('destroy socket', async function (t) {
 test('server does a big write', async function (t) {
   t.plan(7)
 
-  const server = createServer()
+  const server = http.createServer()
   server.on('close', () => t.pass('server closed'))
 
   server.on('connection', function (socket) {
@@ -338,7 +338,7 @@ test('server does a big write', async function (t) {
   server.listen(0)
   await waitForServer(server)
 
-  const reply = await _request({
+  const reply = await request({
     method: 'GET',
     host: server.address().address,
     port: server.address().port,
@@ -368,9 +368,9 @@ function waitForServer (server) {
   })
 }
 
-function _request (opts) {
+function request (opts) {
   return new Promise((resolve) => {
-    const client = request(opts)
+    const client = http.request(opts)
 
     const result = { statusCode: 0, error: null, response: null }
 
