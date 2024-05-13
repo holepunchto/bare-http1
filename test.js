@@ -1,11 +1,10 @@
 const test = require('brittle')
-const { spawn } = require('bare-subprocess')
-const { createServer } = require('.')
+const http = require('.')
 
 test('basic', async function (t) {
-  t.plan(27)
+  t.plan(25)
 
-  const server = createServer()
+  const server = http.createServer()
 
   server.on('listening', function () {
     t.pass('server listening')
@@ -25,9 +24,7 @@ test('basic', async function (t) {
     t.ok(req)
     t.is(req.method, 'GET')
     t.is(req.url, '/something/?key1=value1&key2=value2&enabled')
-    t.alike(req.headers, { host: server.address().address + ':' + server.address().port, connection: 'keep-alive' })
-    t.alike(req.getHeader('connection'), 'keep-alive')
-    t.alike(req.getHeader('Connection'), 'keep-alive')
+    t.alike(req.headers, { host: server.address().address + ':' + server.address().port })
     t.ok(req.socket)
 
     t.ok(res)
@@ -79,11 +76,11 @@ test('basic', async function (t) {
 test('port already in use', async function (t) {
   t.plan(2)
 
-  const server = createServer()
+  const server = http.createServer()
   server.listen(0)
   await waitForServer(server)
 
-  const server2 = createServer()
+  const server2 = http.createServer()
   server2.listen(server.address().port)
   server2.on('error', (err) => {
     t.is(err.code, 'EADDRINUSE')
@@ -96,7 +93,7 @@ test('port already in use', async function (t) {
 test('destroy request', async function (t) {
   t.plan(5)
 
-  const server = createServer()
+  const server = http.createServer()
   server.on('close', () => t.pass('server closed'))
 
   server.on('connection', function (socket) {
@@ -121,6 +118,7 @@ test('destroy request', async function (t) {
   })
 
   t.absent(reply.response, 'client should not receive a response')
+
   t.ok(reply.error, 'client errored')
 
   server.close()
@@ -129,7 +127,7 @@ test('destroy request', async function (t) {
 test('destroy response', async function (t) {
   t.plan(6)
 
-  const server = createServer()
+  const server = http.createServer()
   server.on('close', () => t.pass('server closed'))
 
   server.on('connection', function (socket) {
@@ -163,7 +161,7 @@ test('destroy response', async function (t) {
 test('write head', async function (t) {
   t.plan(8)
 
-  const server = createServer()
+  const server = http.createServer()
   server.on('close', () => t.pass('server closed'))
 
   server.on('connection', function (socket) {
@@ -191,6 +189,7 @@ test('write head', async function (t) {
 
   t.absent(reply.error)
   t.is(reply.response.statusCode, 404)
+
   t.alike(reply.response.chunks, [])
   t.ok(reply.response.ended)
 
@@ -200,7 +199,7 @@ test('write head', async function (t) {
 test('write head with headers', async function (t) {
   t.plan(9)
 
-  const server = createServer()
+  const server = http.createServer()
   server.on('close', () => t.pass('server closed'))
 
   server.on('connection', function (socket) {
@@ -238,7 +237,7 @@ test('write head with headers', async function (t) {
 test('chunked', async function (t) {
   t.plan(7)
 
-  const server = createServer()
+  const server = http.createServer()
   server.on('close', () => t.pass('server closed'))
 
   server.on('connection', function (socket) {
@@ -268,6 +267,7 @@ test('chunked', async function (t) {
   t.is(reply.response.statusCode, 200)
 
   const body = Buffer.concat(reply.response.chunks)
+
   t.alike(body, Buffer.from('part 1 + part 2'), 'client response ended')
 
   server.close()
@@ -276,14 +276,16 @@ test('chunked', async function (t) {
 test('destroy socket', async function (t) {
   t.plan(4)
 
-  const server = createServer()
+  const server = http.createServer()
   server.on('close', () => t.pass('server closed'))
 
   server.on('connection', function (socket) {
     socket.destroy()
 
     socket.on('close', () => t.pass('server socket closed'))
-    socket.on('error', (err) => t.fail('server socket error: ' + err.message + ' (' + err.code + ')'))
+    socket.on('error', (err) => {
+      t.fail('server socket error: ' + err.message + ' (' + err.code + ')')
+    })
   })
 
   server.on('request', function (req, res) {
@@ -309,13 +311,12 @@ test('destroy socket', async function (t) {
 test('server does a big write', async function (t) {
   t.plan(7)
 
-  const server = createServer()
+  const server = http.createServer()
   server.on('close', () => t.pass('server closed'))
 
   server.on('connection', function (socket) {
     socket.on('close', () => t.pass('server socket closed'))
     socket.on('error', (err) => {
-      console.error(err)
       t.fail('server socket error: ' + err.message + ' (' + err.code + ')')
     })
   })
@@ -350,6 +351,34 @@ test('server does a big write', async function (t) {
   server.close()
 })
 
+test('make requests using url', async function (t) {
+  const rqts = t.test('requests')
+  t.plan(2)
+  rqts.plan(2)
+
+  const server = http.createServer().listen(0)
+  await waitForServer(server)
+  server.on('request', (req, res) => {
+    t.is(req.url, '/path')
+    res.end('response')
+  })
+
+  const _url = `http://0.0.0.0:${server.address().port}/path`
+  const expectedBuf = Buffer.from('response')
+
+  http.request(_url, res => {
+    res.on('data', (data) => rqts.alike(data, expectedBuf, 'url as string'))
+  }).end()
+
+  http.request(new URL(_url), res => {
+    res.on('data', (data) => rqts.alike(data, expectedBuf, 'url instance'))
+  }).end()
+
+  await rqts
+
+  server.close()
+})
+
 function waitForServer (server) {
   return new Promise((resolve, reject) => {
     server.on('listening', done)
@@ -364,15 +393,10 @@ function waitForServer (server) {
 }
 
 function request (opts) {
-  const src = `
-    const http = require('http')
-    const client = http.request(${JSON.stringify(opts)})
+  return new Promise((resolve) => {
+    const client = http.request(opts)
 
-    const result = {
-      statusCode: 0,
-      error: null,
-      response: null
-    }
+    const result = { statusCode: 0, error: null, response: null }
 
     client.on('error', function (err) {
       result.error = err.message
@@ -381,32 +405,17 @@ function request (opts) {
     client.on('response', function (res) {
       const r = result.response = { statusCode: res.statusCode, headers: res.headers, ended: false, chunks: [] }
       r.statusCode = res.statusCode
-      res.on('data', (chunk) => r.chunks.push(chunk.toString('hex')))
+      res.on('data', (chunk) => r.chunks.push(chunk))
       res.on('end', () => {
         r.ended = true
       })
     })
 
     client.on('close', () => {
-      process.stdout.write(JSON.stringify(result))
-    })
-
-    client.end()
-  `
-
-  const proc = spawn('node', ['-e', src])
-  const all = []
-
-  proc.stdout.on('data', function (data) {
-    all.push(data)
-  })
-
-  return new Promise((resolve, reject) => {
-    proc.on('exit', function (code) {
-      if (code) return reject(new Error('Bad exit: ' + code))
-      const result = JSON.parse(Buffer.concat(all).toString())
       if (result.response) result.response.chunks = result.response.chunks.map(c => Buffer.from(c, 'hex'))
       resolve(result)
     })
+
+    client.end()
   })
 }

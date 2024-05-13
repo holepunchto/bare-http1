@@ -16,4 +16,14 @@ server.on('connection', function (socket) {
 
 server.listen(8080, function () {
   console.log(server.address())
+
+  const client = http.request({ port: 8080 }, res => {
+    let data = ''
+    res
+      .on('end', () => console.log(data))
+      .on('data', (chunk) => {
+        data += chunk
+      })
+  })
+  client.end()
 })
