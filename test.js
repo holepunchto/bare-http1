@@ -352,29 +352,30 @@ test('server does a big write', async function (t) {
 })
 
 test('make requests using url', async function (t) {
-  const rqts = t.test('requests')
-  t.plan(2)
-  rqts.plan(2)
+  const rq = t.test('requests')
+  rq.plan(5)
 
   const server = http.createServer().listen(0)
   await waitForServer(server)
   server.on('request', (req, res) => {
-    t.is(req.url, '/path')
+    rq.is(req.url, '/path')
     res.end('response')
   })
 
   const _url = `http://0.0.0.0:${server.address().port}/path`
-  const expectedBuf = Buffer.from('response')
 
   http.request(_url, res => {
-    res.on('data', (data) => rqts.alike(data, expectedBuf, 'url as string'))
+    res.on('data', (data) => rq.alike(data, Buffer.from('response'), 'url as string'))
   }).end()
 
   http.request(new URL(_url), res => {
-    res.on('data', (data) => rqts.alike(data, expectedBuf, 'url instance'))
+    res.on('data', (data) => rq.alike(data, Buffer.from('response'), 'url instance'))
   }).end()
 
-  await rqts
+  // test options precedence, the req.url at server should be '/path' over '/random-path'
+  http.request(`http://0.0.0.0:${server.address().port}/random-path`, { path: '/path' }).end()
+
+  await rq
 
   server.close()
 })

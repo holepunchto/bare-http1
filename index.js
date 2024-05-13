@@ -24,11 +24,13 @@ exports.request = function request (url, opts, onresponse) {
   if (typeof url === 'string') url = new URL(url)
 
   if (URL.isURL(url)) {
-    opts = opts ? { ...opts } : {}
+    const urlProps = {
+      host: url.hostname,
+      path: url.pathname,
+      port: url.port ? parseInt(url.port, 10) : defaultPort(url)
+    }
 
-    opts.host = url.hostname
-    opts.path = url.pathname
-    opts.port = url.port ? parseInt(url.port, 10) : defaultPort(url)
+    opts = { ...urlProps, ...(opts || {}) }
   } else {
     opts = url
   }
