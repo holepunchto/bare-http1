@@ -15,6 +15,6 @@ exports.createServer = function createServer (opts, onrequest) {
   return new Server(opts, onrequest)
 }
 
-exports.request = function request (opts, onresponse) {
-  return new Request(opts, onresponse)
+exports.request = function request (url, opts, onresponse) {
+  return new Request(url, opts, onresponse)
 }
