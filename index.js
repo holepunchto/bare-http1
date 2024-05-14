@@ -6,6 +6,7 @@ exports.ServerResponse = require('./lib/server-response')
 exports.ServerConnection = require('./lib/server-connection')
 
 const Request = exports.ClientRequest = require('./lib/client-request')
+exports.ClientConnection = require('./lib/client-connection')
 
 exports.constants = require('./lib/constants')
 
