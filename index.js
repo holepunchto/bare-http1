@@ -28,7 +28,7 @@ exports.request = function request (url, opts, onresponse) {
     opts = opts ? { ...opts } : {}
 
     opts.host = url.hostname
-    opts.path = url.pathname
+    opts.path = url.pathname + url.search
     opts.port = url.port ? parseInt(url.port, 10) : defaultPort(url)
   } else {
     opts = url
