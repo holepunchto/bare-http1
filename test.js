@@ -379,6 +379,26 @@ test('make requests using url', async function (t) {
   server.close()
 })
 
+test('custom request headers', async function (t) {
+  const ht = t.test('headers')
+  ht.plan(1)
+
+  const server = http.createServer().listen(0)
+  await waitForServer(server)
+
+  server.on('request', (req, res) => {
+    ht.is(req.headers['custom-header'], 'value')
+    res.end()
+  })
+
+  const { port } = server.address()
+  http.request({ port, headers: { 'custom-header': 'value' } }).end()
+
+  await ht
+
+  server.close()
+})
+
 function waitForServer (server) {
   return new Promise((resolve, reject) => {
     server.on('listening', done)
