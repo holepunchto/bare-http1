@@ -2,7 +2,7 @@ const test = require('brittle')
 const http = require('.')
 
 test('basic', async function (t) {
-  t.plan(25)
+  t.plan(26)
 
   const server = http.createServer()
 
@@ -24,7 +24,7 @@ test('basic', async function (t) {
     t.ok(req)
     t.is(req.method, 'GET')
     t.is(req.url, '/something/?key1=value1&key2=value2&enabled')
-    t.alike(req.headers, { host: server.address().address + ':' + server.address().port })
+    t.is(req.headers.host, server.address().address + ':' + server.address().port)
     t.ok(req.socket)
 
     t.ok(res)
@@ -47,6 +47,10 @@ test('basic', async function (t) {
       t.pass('server request closed')
     })
 
+    req.on('data', function (data) {
+      t.alike(data, Buffer.from('body message'), 'request body')
+    })
+
     res.on('close', function () {
       t.is(res.headersSent, true, 'headers flushed')
       t.pass('server response closed')
@@ -60,8 +64,9 @@ test('basic', async function (t) {
     method: 'GET',
     host: server.address().address,
     port: server.address().port,
-    path: '/something/?key1=value1&key2=value2&enabled'
-  })
+    path: '/something/?key1=value1&key2=value2&enabled',
+    headers: { 'Content-Length': 12 }
+  }, 'body message')
 
   t.absent(reply.error)
   t.is(reply.response.statusCode, 200)
@@ -412,7 +417,7 @@ function waitForServer (server) {
   })
 }
 
-function request (opts) {
+function request (opts, body) {
   return new Promise((resolve) => {
     const client = http.request(opts)
 
@@ -435,6 +440,8 @@ function request (opts) {
       if (result.response) result.response.chunks = result.response.chunks.map(c => Buffer.from(c, 'hex'))
       resolve(result)
     })
+
+    if (body) client.write(body)
 
     client.end()
   })

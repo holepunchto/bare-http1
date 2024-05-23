@@ -6,9 +6,9 @@ HTTP/1 library for JavaScript.
 npm i bare-http1
 ```
 
-Currently HTTP servers does NOT support server request bodies, but supports most other HTTP features (keep-alive, chunked encoding, etc.) and streaming server responses.
+`http.Server` supports most HTTP features, e.g. keep-alive, chunked encoding, and streaming responses.
 
-Basic HTTP client is supported, but currently it does NOT support keep-alive and protocol negotiation.
+Basic `http.ClientRequest` is implemented, temporarily it does NOT support keep-alive and protocol negotiation.
 
 ## Usage
 
