@@ -66,7 +66,10 @@ test('basic', async function (t) {
     port: server.address().port,
     path: '/something/?key1=value1&key2=value2&enabled',
     headers: { 'Content-Length': 12 }
-  }, 'body message')
+  }, (req) => {
+    req.write('body message')
+    req.end()
+  })
 
   t.absent(reply.error)
   t.is(reply.response.statusCode, 200)
@@ -240,7 +243,7 @@ test('write head with headers', async function (t) {
 })
 
 test('chunked', async function (t) {
-  t.plan(7)
+  t.plan(8)
 
   const server = http.createServer()
   server.on('close', () => t.pass('server closed'))
@@ -251,8 +254,15 @@ test('chunked', async function (t) {
   })
 
   server.on('request', function (req, res) {
-    res.write('part 1 + ')
-    setImmediate(() => res.end('part 2'))
+    const chunks = []
+    req.on('data', (chunk) => chunks.push(chunk))
+    req.on('end', () => {
+      const body = Buffer.concat(chunks.map(c => Buffer.from(c, 'hex')))
+      t.alike(body, Buffer.from('request body part 1 + request body part 2'), 'request body ended')
+    })
+
+    res.write('response part 1 + ')
+    setImmediate(() => { res.end('response part 2') })
 
     req.on('close', () => t.pass('server request closed'))
     res.on('close', () => t.pass('server response closed'))
@@ -266,6 +276,9 @@ test('chunked', async function (t) {
     host: server.address().address,
     port: server.address().port,
     path: '/'
+  }, (req) => {
+    req.write('request body part 1 + ')
+    setImmediate(() => { req.end('request body part 2') })
   })
 
   t.absent(reply.error)
@@ -273,7 +286,7 @@ test('chunked', async function (t) {
 
   const body = Buffer.concat(reply.response.chunks)
 
-  t.alike(body, Buffer.from('part 1 + part 2'), 'client response ended')
+  t.alike(body, Buffer.from('response part 1 + response part 2'), 'client response ended')
 
   server.close()
 })
@@ -313,8 +326,8 @@ test('destroy socket', async function (t) {
   server.close()
 })
 
-test('server does a big write', async function (t) {
-  t.plan(7)
+test('server and client do big writes', async function (t) {
+  t.plan(8)
 
   const server = http.createServer()
   server.on('close', () => t.pass('server closed'))
@@ -327,10 +340,19 @@ test('server does a big write', async function (t) {
   })
 
   server.on('request', function (req, res) {
-    res.write(Buffer.alloc(2 * 1024 * 1024, 'abcd'))
-    setImmediate(() => {
-      res.end(Buffer.alloc(2 * 1024 * 1024, 'efgh'))
+    const chunks = []
+    req.on('data', (chunk) => chunks.push(chunk))
+    req.on('end', () => {
+      const body = Buffer.concat(chunks.map(c => Buffer.from(c, 'hex')))
+      const expected = Buffer.concat([
+        Buffer.alloc(2 * 1024 * 1024, 'qwer'),
+        Buffer.alloc(2 * 1024 * 1024, 'asdf')
+      ])
+      t.alike(body, expected, 'request body ended')
     })
+
+    res.write(Buffer.alloc(2 * 1024 * 1024, 'abcd'))
+    setImmediate(() => { res.end(Buffer.alloc(2 * 1024 * 1024, 'efgh')) })
 
     req.on('close', () => t.pass('server request closed'))
     res.on('close', () => t.pass('server response closed'))
@@ -344,13 +366,19 @@ test('server does a big write', async function (t) {
     host: server.address().address,
     port: server.address().port,
     path: '/'
+  }, (req) => {
+    req.write(Buffer.alloc(2 * 1024 * 1024, 'qwer'))
+    setTimeout(() => { req.end(Buffer.alloc(2 * 1024 * 1024, 'asdf')) })
   })
 
   t.is(reply.response.statusCode, 200)
   t.ok(reply.response.ended)
 
   const body = Buffer.concat(reply.response.chunks)
-  const expected = Buffer.concat([Buffer.alloc(2 * 1024 * 1024, 'abcd'), Buffer.alloc(2 * 1024 * 1024, 'efgh')])
+  const expected = Buffer.concat([
+    Buffer.alloc(2 * 1024 * 1024, 'abcd'),
+    Buffer.alloc(2 * 1024 * 1024, 'efgh')
+  ])
   t.alike(body, expected, 'client response ended')
 
   server.close()
@@ -417,7 +445,7 @@ function waitForServer (server) {
   })
 }
 
-function request (opts, body) {
+function request (opts, cb) {
   return new Promise((resolve) => {
     const client = http.request(opts)
 
@@ -441,8 +469,10 @@ function request (opts, body) {
       resolve(result)
     })
 
-    if (body) client.write(body)
-
-    client.end()
+    if (cb) {
+      cb(client)
+    } else {
+      client.end()
+    }
   })
 }
