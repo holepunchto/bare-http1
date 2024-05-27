@@ -368,7 +368,7 @@ test('server and client do big writes', async function (t) {
     path: '/'
   }, (req) => {
     req.write(Buffer.alloc(2 * 1024 * 1024, 'qwer'))
-    setTimeout(() => { req.end(Buffer.alloc(2 * 1024 * 1024, 'asdf')) })
+    setImmediate(() => { req.end(Buffer.alloc(2 * 1024 * 1024, 'asdf')) })
   })
 
   t.is(reply.response.statusCode, 200)
