@@ -392,28 +392,32 @@ test('protocol negotiation', async function (t) {
   await waitForServer(server)
 
   server.on('upgrade', (req, socket, head) => {
+    up.alike(head, Buffer.from('request head'), 'server upgrade event')
+
     const handshake = 'HTTP/1.1 101 Web Socket Protocol Handshake\r\n' +
       'Upgrade: weird-protocol\r\n' +
       'Connection: Upgrade\r\n' +
       '\r\n'
 
     socket.write(handshake)
-
-    up.pass('server upgrade event')
+    socket.write('server head')
   })
 
-  http.request({
+  const req = http.request({
     port: server.address().port,
     headers: {
       Connection: 'Upgrade',
       Upgrade: 'weird-protocol'
     }
+  }).end('request head')
+
+  req.on('upgrade', (res, socket, head) => {
+    up.alike(head, Buffer.from('server head'), 'request upgrade event')
   })
-    .on('upgrade', (res, socket, head) => up.pass('request upgrade event'))
-    .end()
 
   await up
 
+  req.destroy()
   server.close()
 })
 
