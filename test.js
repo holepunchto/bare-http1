@@ -384,6 +384,39 @@ test('server and client do big writes', async function (t) {
   server.close()
 })
 
+test('protocol negotiation', async function (t) {
+  const up = t.test('upgrade event')
+  up.plan(2)
+
+  const server = http.createServer().listen(0)
+  await waitForServer(server)
+
+  server.on('upgrade', (req, socket, head) => {
+    const handshake = 'HTTP/1.1 101 Web Socket Protocol Handshake\r\n' +
+      'Upgrade: weird-protocol\r\n' +
+      'Connection: Upgrade\r\n' +
+      '\r\n'
+
+    socket.write(handshake)
+
+    up.pass('server upgrade event')
+  })
+
+  http.request({
+    port: server.address().port,
+    headers: {
+      Connection: 'Upgrade',
+      Upgrade: 'weird-protocol'
+    }
+  })
+    .on('upgrade', (res, socket, head) => up.pass('request upgrade event'))
+    .end()
+
+  await up
+
+  server.close()
+})
+
 test('make requests using url', async function (t) {
   const rqts = t.test('requests')
   t.plan(2)
