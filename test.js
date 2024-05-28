@@ -386,14 +386,12 @@ test('server and client do big writes', async function (t) {
 
 test('basic protocol negotiation', async function (t) {
   const up = t.test('upgrade event')
-  up.plan(2)
+  up.plan(8)
 
   const server = http.createServer().listen(0)
   await waitForServer(server)
 
   server.on('upgrade', (req, socket, head) => {
-    up.alike(head, Buffer.from('request head'), 'server upgrade event')
-
     const handshake = 'HTTP/1.1 101 Web Socket Protocol Handshake\r\n' +
       'Upgrade: weird-protocol\r\n' +
       'Connection: Upgrade\r\n' +
@@ -401,6 +399,13 @@ test('basic protocol negotiation', async function (t) {
 
     socket.write(handshake)
     socket.write('server head')
+
+    up.alike(head, Buffer.from('request head'), 'server upgrade event')
+
+    // detached socket events
+    up.absent(socket._events.error)
+    up.absent(socket._events.data)
+    up.absent(socket._events.drain)
   })
 
   const req = http.request({
@@ -413,6 +418,11 @@ test('basic protocol negotiation', async function (t) {
 
   req.on('upgrade', (res, socket, head) => {
     up.alike(head, Buffer.from('server head'), 'request upgrade event')
+
+    // detached socket events
+    up.absent(socket._events.error)
+    up.absent(socket._events.data)
+    up.absent(socket._events.drain)
   })
 
   await up
