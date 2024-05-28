@@ -384,7 +384,7 @@ test('server and client do big writes', async function (t) {
   server.close()
 })
 
-test('protocol negotiation', async function (t) {
+test('basic protocol negotiation', async function (t) {
   const up = t.test('upgrade event')
   up.plan(2)
 
@@ -418,6 +418,34 @@ test('protocol negotiation', async function (t) {
   await up
 
   req.destroy()
+  server.close()
+})
+
+test('close connection if missing upgrade handler', async function (t) {
+  const ce = t.test('close event')
+  ce.plan(1)
+
+  const server = http.createServer().listen(0)
+  await waitForServer(server)
+
+  server.on('upgrade', (req, socket, head) => {
+    const handshake = 'HTTP/1.1 101 Web Socket Protocol Handshake\r\n' +
+      'Upgrade: weird-protocol\r\n' +
+      'Connection: Upgrade\r\n' +
+      '\r\n'
+
+    socket.write(handshake)
+  })
+
+  const req = http.request({
+    port: server.address().port,
+    headers: { Connection: 'Upgrade', Upgrade: 'weird-protocol' }
+  }).end()
+
+  req.on('close', () => ce.pass('connection closed'))
+
+  await ce
+
   server.close()
 })
 
