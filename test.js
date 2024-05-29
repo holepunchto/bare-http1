@@ -386,13 +386,20 @@ test('server and client do big writes', async function (t) {
 
 test('basic protocol negotiation', async function (t) {
   const up = t.test('upgrade event')
-  up.plan(2)
+  up.plan(4)
 
   const server = http.createServer().listen(0)
   await waitForServer(server)
 
   server.on('upgrade', (req, socket, head) => {
     up.alike(head, Buffer.from('request head'), 'server upgrade event')
+
+    req.on('close', () => up.pass('request closed after server upgrade event'))
+
+    req.on('data', () => t.fail('request data event listener should be detached'))
+    req.on('drain', () => t.fail('request drain event listener should be detached'))
+    req.on('end', () => t.fail('request end event listener should be detached'))
+    req.on('error', () => t.fail('request error event listener should be detached'))
 
     const handshake = 'HTTP/1.1 101 Web Socket Protocol Handshake\r\n' +
       'Upgrade: weird-protocol\r\n' +
@@ -413,6 +420,14 @@ test('basic protocol negotiation', async function (t) {
 
   req.on('upgrade', (res, socket, head) => {
     up.alike(head, Buffer.from('server head'), 'request upgrade event')
+
+    req.on('close', () => up.pass('request closed after request upgrade event'))
+
+    res.on('close', () => t.fail('response close event listener should be detached'))
+    res.on('data', () => t.fail('response data event listener should be detached'))
+    res.on('drain', () => t.fail('response drain event listener should be detached'))
+    res.on('end', () => t.fail('response end event listener should be detached'))
+    res.on('error', () => t.fail('response error event listener should be detached'))
 
     socket.end()
   })
