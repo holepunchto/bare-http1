@@ -31,9 +31,6 @@
   },
   "devDependencies": {
     "brittle": "^3.3.0",
-    "mime-types": "^2.1.35",
-    "pump": "^3.0.0",
-    "range-parser": "^1.2.1",
     "standard": "^17.0.0"
   }
 }
