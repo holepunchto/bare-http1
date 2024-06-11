@@ -480,14 +480,14 @@ test('make requests using url', async function (t) {
     res.end('response')
   })
 
-  const _url = `http://0.0.0.0:${server.address().port}/path`
+  const url = `http://localhost:${server.address().port}/path`
   const expectedBuf = Buffer.from('response')
 
-  http.request(_url, res => {
+  http.request(url, res => {
     res.on('data', (data) => rqts.alike(data, expectedBuf, 'url as string'))
   }).end()
 
-  http.request(new URL(_url), res => {
+  http.request(new URL(url), res => {
     res.on('data', (data) => rqts.alike(data, expectedBuf, 'url instance'))
   }).end()
 
