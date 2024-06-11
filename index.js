@@ -1,6 +1,9 @@
 exports.IncomingMessage = require('./lib/incoming-message')
 exports.OutgoingMessage = require('./lib/outgoing-message')
 
+const Agent = exports.Agent = require('./lib/agent')
+exports.globalAgent = Agent.global
+
 const Server = exports.Server = require('./lib/server')
 exports.ServerResponse = require('./lib/server-response')
 exports.ServerConnection = require('./lib/server-connection')
