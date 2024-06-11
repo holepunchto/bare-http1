@@ -1,6 +1,6 @@
 {
   "name": "bare-http1",
-  "version": "3.5.2",
+  "version": "3.6.0",
   "description": "Native HTTP/1 library for JavaScript",
   "exports": {
     ".": "./index.js",
