@@ -44,10 +44,10 @@ exports.request = function request (url, opts, onresponse) {
 function defaultPort (url) {
   switch (url.protocol) {
     case 'ftp:': return 21
-    case 'http':
-    case 'ws': return 80
-    case 'https':
-    case 'wss': return 443
+    case 'http:':
+    case 'ws:': return 80
+    case 'https:':
+    case 'wss:': return 443
   }
 
   return null
