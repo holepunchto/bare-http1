@@ -22,7 +22,7 @@ test('basic', async function (t) {
 
   server.on('request', function (req, res) {
     t.ok(req)
-    t.is(req.method, 'GET')
+    t.is(req.method, 'POST')
     t.is(req.url, '/something/?key1=value1&key2=value2&enabled')
     t.is(req.headers.host, server.address().address + ':' + server.address().port)
     t.ok(req.socket)
@@ -61,7 +61,7 @@ test('basic', async function (t) {
   await waitForServer(server)
 
   const reply = await request({
-    method: 'GET',
+    method: 'POST',
     host: server.address().address,
     port: server.address().port,
     path: '/something/?key1=value1&key2=value2&enabled',
@@ -154,7 +154,7 @@ test('destroy response', async function (t) {
   await waitForServer(server)
 
   const reply = await request({
-    method: 'GET',
+    method: 'POST',
     host: server.address().address,
     port: server.address().port,
     path: '/'
