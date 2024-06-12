@@ -272,7 +272,7 @@ test('chunked', async function (t) {
   await waitForServer(server)
 
   const reply = await request({
-    method: 'GET',
+    method: 'POST',
     host: server.address().address,
     port: server.address().port,
     path: '/'
@@ -362,7 +362,7 @@ test('server and client do big writes', async function (t) {
   await waitForServer(server)
 
   const reply = await request({
-    method: 'GET',
+    method: 'POST',
     host: server.address().address,
     port: server.address().port,
     path: '/'
