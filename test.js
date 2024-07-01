@@ -516,6 +516,77 @@ test('custom request headers', async function (t) {
   server.close()
 })
 
+test('request timeout', async function (t) {
+  const sub = t.test()
+  sub.plan(2)
+
+  let serverResponse
+  const server = http.createServer((req, res) => {
+    serverResponse = res
+  }).listen(0)
+
+  await waitForServer(server)
+
+  const client = http.request({ port: server.address().port }).end()
+
+  client.setTimeout(100, () => sub.pass('callback'))
+  client.on('timeout', () => sub.pass('event'))
+
+  await sub
+
+  serverResponse.end()
+  server.close()
+})
+
+test('server timeout', async function (t) {
+  const sub = t.test()
+  sub.plan(3)
+
+  const server = http.createServer((res, req) => req.end()).listen(0)
+
+  server.setTimeout(100, (socket) => {
+    sub.is(typeof socket, 'object', 'callback receive socket as argument')
+  })
+
+  server.on('timeout', (socket) => {
+    sub.is(typeof socket, 'object', 'event receive socket as argument')
+  })
+
+  sub.is(server.timeout, 100, 'timeout getter')
+
+  await waitForServer(server)
+
+  const { port } = server.address()
+  const req = http.request({ port })
+
+  await sub
+
+  req.end()
+  server.close()
+})
+
+test('server response timeout', async function (t) {
+  const sub = t.test()
+  sub.plan(2)
+
+  let serverResponse
+  const server = http.createServer((req, res) => {
+    res.setTimeout(100, () => sub.pass('timeout callback'))
+    res.on('timeout', () => sub.pass('timeout event'))
+
+    serverResponse = res
+  }).listen(0)
+
+  await waitForServer(server)
+
+  http.request({ port: server.address().port }).end()
+
+  await sub
+
+  serverResponse.end()
+  server.close()
+})
+
 function waitForServer (server) {
   return new Promise((resolve, reject) => {
     server.on('listening', done)
