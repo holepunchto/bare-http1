@@ -565,6 +565,40 @@ test('server timeout', async function (t) {
   server.close()
 })
 
+test('close the server at timeout if do not have any handler', async function (t) {
+  t.plan(1)
+  const server = http.createServer().listen(0).setTimeout(100)
+
+  await waitForServer(server)
+
+  const client = http.request({ port: server.address().port })
+
+  client.on('error', () => {
+    t.pass()
+
+    server.close()
+  })
+})
+
+test('do not close the server at timeout if a handler is found', async function (t) {
+  t.plan(1)
+
+  const server = http.createServer((req, res) => {
+    res.on('timeout', () => {
+      t.pass('response timeout')
+
+      res.end()
+      server.close()
+    })
+  })
+
+  server.listen(0).setTimeout(100)
+
+  await waitForServer(server)
+
+  http.request({ port: server.address().port }).end()
+})
+
 test('server response timeout', async function (t) {
   const sub = t.test()
   sub.plan(2)
