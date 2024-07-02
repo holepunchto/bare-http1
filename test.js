@@ -621,6 +621,45 @@ test('server response timeout', async function (t) {
   server.close()
 })
 
+test('cancel timeouts when has upgrade event handled', async function (t) {
+  const server = http.createServer().listen(0)
+
+  server.setTimeout(100, () => t.fail('timeout callback'))
+  server.on('timeout', () => t.fail('timeout event'))
+
+  server.on('upgrade', (req, socket, head) => {
+    const handshake = 'HTTP/1.1 101 Web Socket Protocol Handshake\r\n' +
+      'Upgrade: weird-protocol\r\n' +
+      'Connection: Upgrade\r\n' +
+      '\r\n'
+
+    socket.end(handshake)
+  })
+
+  await waitForServer(server)
+
+  const client = http.request({
+    port: server.address().port,
+    headers: {
+      Connection: 'Upgrade',
+      Upgrade: 'weird-protocol'
+    }
+  }).end()
+
+  client.setTimeout(100, () => t.fail('client callback'))
+  client.on('timeout', () => t.fail('client event'))
+
+  let upgradedSocket
+  client.on('upgrade', (res, socket) => { upgradedSocket = socket })
+
+  setTimeout(() => {
+    t.end()
+
+    upgradedSocket.end()
+    server.close()
+  }, 400)
+})
+
 function waitForServer (server) {
   return new Promise((resolve, reject) => {
     server.on('listening', done)
