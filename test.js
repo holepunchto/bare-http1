@@ -516,6 +516,150 @@ test('custom request headers', async function (t) {
   server.close()
 })
 
+test('request timeout', async function (t) {
+  const sub = t.test()
+  sub.plan(2)
+
+  let serverResponse
+  const server = http.createServer((req, res) => {
+    serverResponse = res
+  }).listen(0)
+
+  await waitForServer(server)
+
+  const client = http.request({ port: server.address().port }).end()
+
+  client.setTimeout(100, () => sub.pass('callback'))
+  client.on('timeout', () => sub.pass('event'))
+
+  await sub
+
+  serverResponse.end()
+  server.close()
+})
+
+test('server timeout', async function (t) {
+  const sub = t.test()
+  sub.plan(3)
+
+  const server = http.createServer((res, req) => req.end()).listen(0)
+
+  server.setTimeout(100, (socket) => {
+    sub.is(typeof socket, 'object', 'callback receive socket as argument')
+  })
+
+  server.on('timeout', (socket) => {
+    sub.is(typeof socket, 'object', 'event receive socket as argument')
+  })
+
+  sub.is(server.timeout, 100, 'timeout getter')
+
+  await waitForServer(server)
+
+  const { port } = server.address()
+  const req = http.request({ port })
+
+  await sub
+
+  req.end()
+  server.close()
+})
+
+test('close the server at timeout if do not have any handler', async function (t) {
+  t.plan(1)
+  const server = http.createServer().listen(0).setTimeout(100)
+
+  await waitForServer(server)
+
+  const client = http.request({ port: server.address().port })
+
+  client.on('error', () => {
+    t.pass()
+
+    server.close()
+  })
+})
+
+test('do not close the server at timeout if a handler is found', async function (t) {
+  t.plan(1)
+
+  const server = http.createServer((req, res) => {
+    res.on('timeout', () => {
+      t.pass('response timeout')
+
+      res.end()
+      server.close()
+    })
+  })
+
+  server.listen(0).setTimeout(100)
+
+  await waitForServer(server)
+
+  http.request({ port: server.address().port }).end()
+})
+
+test('server response timeout', async function (t) {
+  const sub = t.test()
+  sub.plan(2)
+
+  let serverResponse
+  const server = http.createServer((req, res) => {
+    res.setTimeout(100, () => sub.pass('timeout callback'))
+    res.on('timeout', () => sub.pass('timeout event'))
+
+    serverResponse = res
+  }).listen(0)
+
+  await waitForServer(server)
+
+  http.request({ port: server.address().port }).end()
+
+  await sub
+
+  serverResponse.end()
+  server.close()
+})
+
+test('cancel timeouts when has upgrade event handled', async function (t) {
+  const server = http.createServer().listen(0)
+
+  server.setTimeout(100, () => t.fail('timeout callback'))
+  server.on('timeout', () => t.fail('timeout event'))
+
+  server.on('upgrade', (req, socket, head) => {
+    const handshake = 'HTTP/1.1 101 Web Socket Protocol Handshake\r\n' +
+      'Upgrade: weird-protocol\r\n' +
+      'Connection: Upgrade\r\n' +
+      '\r\n'
+
+    socket.end(handshake)
+  })
+
+  await waitForServer(server)
+
+  const client = http.request({
+    port: server.address().port,
+    headers: {
+      Connection: 'Upgrade',
+      Upgrade: 'weird-protocol'
+    }
+  }).end()
+
+  client.setTimeout(100, () => t.fail('client callback'))
+  client.on('timeout', () => t.fail('client event'))
+
+  let upgradedSocket
+  client.on('upgrade', (res, socket) => { upgradedSocket = socket })
+
+  setTimeout(() => {
+    t.end()
+
+    upgradedSocket.end()
+    server.close()
+  }, 400)
+})
+
 function waitForServer (server) {
   return new Promise((resolve, reject) => {
     server.on('listening', done)
