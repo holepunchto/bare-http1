@@ -65,7 +65,8 @@ test('basic', async function (t) {
     host: server.address().address,
     port: server.address().port,
     path: '/something/?key1=value1&key2=value2&enabled',
-    headers: { 'Content-Length': 12 }
+    headers: { 'Content-Length': 12 },
+    agent: false
   }, (req) => {
     req.write('body message')
     req.end()
@@ -192,7 +193,8 @@ test('write head', async function (t) {
     method: 'GET',
     host: server.address().address,
     port: server.address().port,
-    path: '/'
+    path: '/',
+    agent: false
   })
 
   t.absent(reply.error)
@@ -230,7 +232,8 @@ test('write head with headers', async function (t) {
     method: 'GET',
     host: server.address().address,
     port: server.address().port,
-    path: '/'
+    path: '/',
+    agent: false
   })
 
   t.absent(reply.error)
@@ -275,7 +278,8 @@ test('chunked', async function (t) {
     method: 'POST',
     host: server.address().address,
     port: server.address().port,
-    path: '/'
+    path: '/',
+    agent: false
   }, (req) => {
     req.write('request body part 1 + ')
     setImmediate(() => { req.end('request body part 2') })
@@ -365,7 +369,8 @@ test('server and client do big writes', async function (t) {
     method: 'POST',
     host: server.address().address,
     port: server.address().port,
-    path: '/'
+    path: '/',
+    agent: false
   }, (req) => {
     req.write(Buffer.alloc(2 * 1024 * 1024, 'qwer'))
     setImmediate(() => { req.end(Buffer.alloc(2 * 1024 * 1024, 'asdf')) })
@@ -483,11 +488,11 @@ test('make requests using url', async function (t) {
   const url = `http://localhost:${server.address().port}/path`
   const expectedBuf = Buffer.from('response')
 
-  http.request(url, res => {
+  http.request(url, { agent: false }, res => {
     res.on('data', (data) => rqts.alike(data, expectedBuf, 'url as string'))
   }).end()
 
-  http.request(new URL(url), res => {
+  http.request(new URL(url), { agent: false }, res => {
     res.on('data', (data) => rqts.alike(data, expectedBuf, 'url instance'))
   }).end()
 
@@ -509,7 +514,7 @@ test('custom request headers', async function (t) {
   })
 
   const { port } = server.address()
-  http.request({ port, headers: { 'custom-header': 'value' } }).end()
+  http.request({ port, headers: { 'custom-header': 'value' }, agent: false }).end()
 
   await ht
 
@@ -527,7 +532,7 @@ test('request timeout', async function (t) {
 
   await waitForServer(server)
 
-  const client = http.request({ port: server.address().port }).end()
+  const client = http.request({ port: server.address().port, agent: false }).end()
 
   client.setTimeout(100, () => sub.pass('callback'))
   client.on('timeout', () => sub.pass('event'))
@@ -557,7 +562,7 @@ test('server timeout', async function (t) {
   await waitForServer(server)
 
   const { port } = server.address()
-  const req = http.request({ port })
+  const req = http.request({ port, agent: false })
 
   await sub
 
@@ -596,7 +601,7 @@ test('do not close the server at timeout if a handler is found', async function 
 
   await waitForServer(server)
 
-  http.request({ port: server.address().port }).end()
+  http.request({ port: server.address().port, agent: false }).end()
 })
 
 test('server response timeout', async function (t) {
@@ -613,7 +618,7 @@ test('server response timeout', async function (t) {
 
   await waitForServer(server)
 
-  http.request({ port: server.address().port }).end()
+  http.request({ port: server.address().port, agent: false }).end()
 
   await sub
 
@@ -658,6 +663,67 @@ test('cancel timeouts when has upgrade event handled', async function (t) {
     upgradedSocket.end()
     server.close()
   }, 400)
+})
+
+test('socket reuse', async function (t) {
+  const sub = t.test()
+  sub.plan(10)
+
+  const server = http.createServer().listen(0)
+  server.on('request', (req, res) => res.end('response'))
+
+  await waitForServer(server)
+
+  const { port } = server.address()
+  const agent = new http.Agent({ port, keepAlive: true })
+
+  const key = `localhost:${port}` // equal to `agent.getName` result
+
+  let firstRequestSocket, secondRequestSocket
+
+  const firstRequest = http.request({ agent }, (res) => {
+    res.on('data', (data) => sub.alike(data, Buffer.from('response')))
+
+    sub.ok(key in agent._sockets)
+    sub.is(agent._sockets[key].length, 1, `one busy socket at ${key}`)
+
+    firstRequestSocket = agent._sockets[key][0]
+  }).end()
+
+  firstRequest.on('close', () => {
+    setImmediate(() => {
+      sub.is(Object.keys(agent._sockets).length, 0, 'no busy sockets')
+
+      sub.ok(key in agent._freeSockets)
+      sub.is(agent._freeSockets[key].length, 1, `one free socket at ${key}`)
+
+      triggerSecondRequest()
+    })
+  })
+
+  const triggerSecondRequest = () => {
+    const secondRequest = http.request({ agent }, (res) => {
+      res.on('data', (data) => sub.alike(data, Buffer.from('response')))
+
+      secondRequestSocket = agent._sockets[key][0]
+      sub.ok(firstRequestSocket === secondRequestSocket, 'socket is being reused')
+    }).end()
+
+    secondRequest.on('close', cleanup)
+  }
+
+  const cleanup = () => {
+    agent.destroy()
+
+    setImmediate(() => {
+      sub.ok(Object.keys(agent._sockets).length === 0, 'no sockets tracking after agent destruction')
+      sub.ok(Object.keys(agent._freeSockets).length === 0, 'no free sockets tracking after agent destruction')
+    })
+  }
+
+  await sub
+
+  server.close()
 })
 
 function waitForServer (server) {
