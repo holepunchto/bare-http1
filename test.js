@@ -684,18 +684,20 @@ test('socket reuse', async function (t) {
   const firstRequest = http.request({ agent }, (res) => {
     res.on('data', (data) => sub.alike(data, Buffer.from('response')))
 
-    sub.ok(agent._sockets.has(key))
-    sub.is(agent._sockets.get(key).size, 1, `one busy socket at ${key}`)
+    const busySockets = agent._sockets.get(key)
+    sub.ok(busySockets)
+    sub.is(busySockets.size, 1, `one busy socket at ${key}`)
 
-    firstRequestSocket = agent._sockets.get(key).values().next().value
+    firstRequestSocket = busySockets.values().next().value
   }).end()
 
   firstRequest.on('close', () => {
     setImmediate(() => {
       sub.is(agent._sockets.size, 0, 'no busy sockets')
 
-      sub.ok(agent._freeSockets.has(key))
-      sub.is(agent._freeSockets.get(key).length, 1, `one free socket at ${key}`)
+      const freeSockets = agent._freeSockets.get(key)
+      sub.ok(freeSockets)
+      sub.is(freeSockets.size, 1, `one free socket at ${key}`)
 
       triggerSecondRequest()
     })
@@ -705,7 +707,8 @@ test('socket reuse', async function (t) {
     const secondRequest = http.request({ agent }, (res) => {
       res.on('data', (data) => sub.alike(data, Buffer.from('response')))
 
-      secondRequestSocket = agent._sockets.get(key).values().next().value
+      const busySockets = agent._sockets.get(key)
+      secondRequestSocket = busySockets.values().next().value
       sub.ok(firstRequestSocket === secondRequestSocket, 'socket is being reused')
     }).end()
 
