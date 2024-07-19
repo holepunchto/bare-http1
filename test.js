@@ -514,7 +514,7 @@ test('custom request headers', async function (t) {
 
   await ht
 
-  server.close()
+  setImmediate(() => server.close())
 })
 
 test('request timeout', async function (t) {
