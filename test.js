@@ -382,7 +382,7 @@ test('server and client do big writes', async function (t) {
   ])
   t.alike(body, expected, 'client response ended')
 
-  server.close()
+  setImmediate(() => server.close())
 })
 
 test('basic protocol negotiation', async function (t) {
@@ -505,8 +505,8 @@ test('custom request headers', async function (t) {
   await waitForServer(server)
 
   server.on('request', (req, res) => {
-    ht.is(req.headers['custom-header'], 'value')
     res.end()
+    ht.is(req.headers['custom-header'], 'value')
   })
 
   const { port } = server.address()
@@ -536,7 +536,7 @@ test('request timeout', async function (t) {
   await sub
 
   serverResponse.end()
-  server.close()
+  setImmediate(() => server.close())
 })
 
 test('server timeout', async function (t) {
@@ -589,7 +589,7 @@ test('do not close the server at timeout if a handler is found', async function 
       t.pass('response timeout')
 
       res.end()
-      server.close()
+      setImmediate(() => server.close())
     })
   })
 
@@ -619,7 +619,7 @@ test('server response timeout', async function (t) {
   await sub
 
   serverResponse.end()
-  server.close()
+  setImmediate(() => server.close())
 })
 
 test('cancel timeouts when has upgrade event handled', async function (t) {
