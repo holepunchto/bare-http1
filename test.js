@@ -77,8 +77,7 @@ test('basic', async function (t) {
   const body = Buffer.concat(reply.response.chunks)
   t.alike(body, Buffer.from('Hello world!'), 'client response ended')
 
-  server.close()
-  server.on('close', () => t.pass('server closed'))
+  server.close(() => t.pass('server closed'))
 })
 
 test('port already in use', async function (t) {
@@ -504,8 +503,8 @@ test('custom request headers', async function (t) {
   await waitForServer(server)
 
   server.on('request', (req, res) => {
-    ht.is(req.headers['custom-header'], 'value')
     res.end()
+    ht.is(req.headers['custom-header'], 'value')
   })
 
   const { port } = server.address()
@@ -517,28 +516,32 @@ test('custom request headers', async function (t) {
 })
 
 test('request timeout', async function (t) {
+  t.plan(3)
+
   const sub = t.test()
   sub.plan(2)
 
-  let serverResponse
   const server = http.createServer((req, res) => {
-    serverResponse = res
+    sub.then(() => res.end())
   }).listen(0)
 
   await waitForServer(server)
 
-  const client = http.request({ port: server.address().port }).end()
+  const req = http.request({ port: server.address().port }).end()
 
-  client.setTimeout(100, () => sub.pass('callback'))
-  client.on('timeout', () => sub.pass('event'))
+  req
+    .on('error', () => t.pass('socket closed'))
+    .on('timeout', () => sub.pass('event'))
+    .setTimeout(100, () => sub.pass('callback'))
 
   await sub
 
-  serverResponse.end()
-  server.close()
+  server.close(() => t.pass('server closed'))
 })
 
 test('server timeout', async function (t) {
+  t.plan(3)
+
   const sub = t.test()
   sub.plan(3)
 
@@ -559,10 +562,12 @@ test('server timeout', async function (t) {
   const { port } = server.address()
   const req = http.request({ port })
 
+  req.on('error', () => t.pass('request timeout'))
+
   await sub
 
   req.end()
-  server.close()
+  server.close(() => t.pass('server closed'))
 })
 
 test('close the server at timeout if do not have any handler', async function (t) {
@@ -581,7 +586,7 @@ test('close the server at timeout if do not have any handler', async function (t
 })
 
 test('do not close the server at timeout if a handler is found', async function (t) {
-  t.plan(1)
+  t.plan(2)
 
   const server = http.createServer((req, res) => {
     res.on('timeout', () => {
@@ -596,29 +601,33 @@ test('do not close the server at timeout if a handler is found', async function 
 
   await waitForServer(server)
 
-  http.request({ port: server.address().port }).end()
+  const req = http.request({ port: server.address().port }).end()
+
+  req.on('error', () => t.pass('socket closed'))
 })
 
 test('server response timeout', async function (t) {
+  t.plan(3)
+
   const sub = t.test()
   sub.plan(2)
 
-  let serverResponse
   const server = http.createServer((req, res) => {
     res.setTimeout(100, () => sub.pass('timeout callback'))
     res.on('timeout', () => sub.pass('timeout event'))
 
-    serverResponse = res
+    sub.then(() => res.end())
   }).listen(0)
 
   await waitForServer(server)
 
-  http.request({ port: server.address().port }).end()
+  const req = http.request({ port: server.address().port }).end()
+
+  req.on('error', () => t.pass('socket closed'))
 
   await sub
 
-  serverResponse.end()
-  server.close()
+  server.close(() => t.pass('server closed'))
 })
 
 test('cancel timeouts when has upgrade event handled', async function (t) {
@@ -658,6 +667,49 @@ test('cancel timeouts when has upgrade event handled', async function (t) {
     upgradedSocket.end()
     server.close()
   }, 400)
+})
+
+test('socket reuse', async function (t) {
+  t.plan(2)
+
+  const sub = t.test()
+  sub.plan(3)
+
+  const server = http.createServer().listen(0)
+  server.on('request', (req, res) => res.end('response'))
+
+  await waitForServer(server)
+
+  const { port } = server.address()
+  const agent = new http.Agent({ port, keepAlive: true })
+
+  let socket
+
+  let req = http
+    .request({ agent }, (res) => {
+      socket = req.socket
+
+      res.on('data', (data) => sub.alike(data, Buffer.from('response')))
+    })
+    .on('close', () => {
+      setImmediate(() => {
+        req = http
+          .request({ agent }, (res) => {
+            sub.is(req.socket, socket, 'socket was reused')
+
+            res.on('data', (data) => sub.alike(data, Buffer.from('response')))
+          })
+          .on('close', () => {
+            agent.destroy()
+          })
+          .end()
+      })
+    })
+    .end()
+
+  await sub
+
+  server.close(() => t.pass('server closed'))
 })
 
 function waitForServer (server) {
