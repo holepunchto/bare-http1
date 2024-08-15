@@ -34,7 +34,11 @@ exports.request = function request (url, opts, onresponse) {
     opts.path = url.pathname + url.search
     opts.port = url.port ? parseInt(url.port, 10) : defaultPort(url)
   } else {
-    opts = url
+    opts = url ? { ...url } : {}
+
+    // For Node.js compatibility
+    opts.host = opts.hostname || opts.host
+    opts.port = typeof opts.port === 'string' ? parseInt(opts.port, 10) : opts.port
   }
 
   return new Request(opts, onresponse)
