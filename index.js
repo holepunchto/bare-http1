@@ -35,6 +35,8 @@ exports.request = function request (url, opts, onresponse) {
     opts.port = url.port ? parseInt(url.port, 10) : defaultPort(url)
   } else {
     opts = url
+    opts.host = opts.hostname || opts.host
+    opts.port = parseInt(opts.port, 10)
   }
 
   return new Request(opts, onresponse)
