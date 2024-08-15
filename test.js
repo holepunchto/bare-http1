@@ -325,7 +325,7 @@ test('destroy socket', async function (t) {
   server.close()
 })
 
-test('server and client do big writes', { timeout: 60000 }, async function (t) {
+test('server and client do big writes', async function (t) {
   t.plan(8)
 
   const server = http.createServer()
