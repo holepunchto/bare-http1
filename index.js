@@ -27,7 +27,7 @@ exports.request = function request (url, opts, onresponse) {
 
   if (typeof url === 'string') url = new URL(url)
 
-  if (URL.isURL(url)) {
+  if (isURL(url)) {
     opts = opts ? { ...opts } : {}
 
     opts.host = url.hostname
@@ -51,4 +51,16 @@ function defaultPort (url) {
   }
 
   return null
+}
+
+// https://url.spec.whatwg.org/#api
+function isURL (url) {
+  return (
+    url !== null &&
+    typeof url === 'object' &&
+    typeof url.protocol === 'string' &&
+    typeof url.hostname === 'string' &&
+    typeof url.pathname === 'string' &&
+    typeof url.search === 'string'
+  )
 }
