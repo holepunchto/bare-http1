@@ -261,7 +261,7 @@ test('chunked', async function (t) {
     })
 
     res.write('response part 1 + ')
-    setImmediate(() => { res.end('response part 2') })
+    res.end('response part 2')
 
     req.on('close', () => t.pass('server request closed'))
     res.on('close', () => t.pass('server response closed'))
@@ -277,7 +277,7 @@ test('chunked', async function (t) {
     path: '/'
   }, (req) => {
     req.write('request body part 1 + ')
-    setImmediate(() => { req.end('request body part 2') })
+    req.end('request body part 2')
   })
 
   t.absent(reply.error)
@@ -351,7 +351,7 @@ test('server and client do big writes', async function (t) {
     })
 
     res.write(Buffer.alloc(2 * 1024 * 1024, 'abcd'))
-    setImmediate(() => { res.end(Buffer.alloc(2 * 1024 * 1024, 'efgh')) })
+    res.end(Buffer.alloc(2 * 1024 * 1024, 'efgh'))
 
     req.on('close', () => t.pass('server request closed'))
     res.on('close', () => t.pass('server response closed'))
@@ -367,7 +367,7 @@ test('server and client do big writes', async function (t) {
     path: '/'
   }, (req) => {
     req.write(Buffer.alloc(2 * 1024 * 1024, 'qwer'))
-    setImmediate(() => { req.end(Buffer.alloc(2 * 1024 * 1024, 'asdf')) })
+    req.end(Buffer.alloc(2 * 1024 * 1024, 'asdf'))
   })
 
   t.is(reply.response.statusCode, 200)
