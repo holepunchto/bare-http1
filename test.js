@@ -712,6 +712,43 @@ test('socket reuse', async function (t) {
   server.close(() => t.pass('server closed'))
 })
 
+test('destroy timeouted free socket', async function (t) {
+  const sub = t.test()
+  sub.plan(1)
+
+  const server = http.createServer().listen(0)
+  server.on('request', (req, res) => res.end())
+
+  await waitForServer(server)
+
+  const agent = new http.Agent({
+    port: server.address().port,
+    keepAlive: true,
+    timeout: 500
+  })
+
+  let socket
+
+  let req = http
+    .request({ agent }, (res) => {
+      socket = req.socket
+    })
+    .on('close', () => {
+      setTimeout(() => {
+        req = http
+          .request({ agent }, (res) => {
+            sub.not(req.socket, socket, 'socket was not reused')
+          })
+          .end()
+      }, 1000)
+    })
+    .end()
+
+  await sub
+
+  server.close()
+})
+
 function waitForServer (server) {
   return new Promise((resolve, reject) => {
     server.on('listening', done)
