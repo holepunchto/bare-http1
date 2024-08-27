@@ -348,10 +348,10 @@ test('server and client do big writes', async function (t) {
         Buffer.alloc(2 * 1024 * 1024, 'asdf')
       ])
       t.alike(body, expected, 'request body ended')
-    })
 
-    res.write(Buffer.alloc(2 * 1024 * 1024, 'abcd'))
-    setImmediate(() => { res.end(Buffer.alloc(2 * 1024 * 1024, 'efgh')) })
+      res.write(Buffer.alloc(2 * 1024 * 1024, 'abcd'))
+      setImmediate(() => { res.end(Buffer.alloc(2 * 1024 * 1024, 'efgh')) })
+    })
 
     req.on('close', () => t.pass('server request closed'))
     res.on('close', () => t.pass('server response closed'))
