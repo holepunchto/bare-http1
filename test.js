@@ -1,5 +1,6 @@
 const test = require('brittle')
 const http = require('.')
+const tcp = require('bare-tcp')
 
 test('basic', async function (t) {
   t.plan(26)
@@ -321,6 +322,48 @@ test('destroy socket', async function (t) {
 
   t.absent(reply.response)
   t.ok(reply.error, 'had error')
+
+  server.close()
+})
+
+test('close server request/response at premature GET request closure', async function (t) {
+  const sub = t.test('')
+  sub.plan(2)
+
+  const server = http.createServer((req, res) => {
+    req.on('close', () => sub.pass('request closed'))
+    res.on('close', () => sub.pass('response closed'))
+  }).listen(0)
+
+  await waitForServer(server)
+
+  const client = tcp.createConnection(server.address().port)
+  client.write('GET / HTTP/1.1\r\n\r\n')
+
+  setTimeout(() => client.destroy(), 300)
+
+  await sub
+
+  server.close()
+})
+
+test('close server request/response at premature POST request closure', async function (t) {
+  const sub = t.test('')
+  sub.plan(2)
+
+  const server = http.createServer((req, res) => {
+    req.on('close', () => sub.pass('request closed'))
+    res.on('close', () => sub.pass('response closed'))
+  }).listen(0)
+
+  await waitForServer(server)
+
+  const client = tcp.createConnection(server.address().port)
+  client.write('POST / HTTP/1.1\r\nContent-Length: 10000000\r\n\r\n')
+
+  setTimeout(() => client.destroy(), 300)
+
+  await sub
 
   server.close()
 })
