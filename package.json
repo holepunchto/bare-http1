@@ -27,7 +27,8 @@
   "dependencies": {
     "bare-events": "^2.0.0",
     "bare-stream": "^2.0.0",
-    "bare-tcp": "^1.8.0"
+    "bare-tcp": "^1.8.0",
+    "streamx": "^2.20.0"
   },
   "devDependencies": {
     "brittle": "^3.3.0",
