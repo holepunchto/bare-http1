@@ -26,7 +26,7 @@
   "homepage": "https://github.com/holepunchto/bare-http1#readme",
   "dependencies": {
     "bare-events": "^2.0.0",
-    "bare-stream": "^2.0.0",
+    "bare-stream": "^2.3.0",
     "bare-tcp": "^1.8.0"
   },
   "devDependencies": {
