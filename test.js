@@ -1,6 +1,6 @@
 const test = require('brittle')
-const http = require('.')
 const tcp = require('bare-tcp')
+const http = require('.')
 
 test('basic', async function (t) {
   t.plan(26)
