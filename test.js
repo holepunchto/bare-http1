@@ -18,14 +18,19 @@ test('basic', async function (t) {
       t.pass('server socket closed')
     })
 
-    socket.on('error', (err) => t.fail('server socket error: ' + err.message + ' (' + err.code + ')'))
+    socket.on('error', (err) =>
+      t.fail('server socket error: ' + err.message + ' (' + err.code + ')')
+    )
   })
 
   server.on('request', function (req, res) {
     t.ok(req)
     t.is(req.method, 'POST')
     t.is(req.url, '/something/?key1=value1&key2=value2&enabled')
-    t.is(req.headers.host, server.address().address + ':' + server.address().port)
+    t.is(
+      req.headers.host,
+      server.address().address + ':' + server.address().port
+    )
     t.ok(req.socket)
 
     t.ok(res)
@@ -61,16 +66,19 @@ test('basic', async function (t) {
   server.listen(0)
   await waitForServer(server)
 
-  const reply = await request({
-    method: 'POST',
-    host: server.address().address,
-    port: server.address().port,
-    path: '/something/?key1=value1&key2=value2&enabled',
-    headers: { 'Content-Length': 12 }
-  }, (req) => {
-    req.write('body message')
-    req.end()
-  })
+  const reply = await request(
+    {
+      method: 'POST',
+      host: server.address().address,
+      port: server.address().port,
+      path: '/something/?key1=value1&key2=value2&enabled',
+      headers: { 'Content-Length': 12 }
+    },
+    (req) => {
+      req.write('body message')
+      req.end()
+    }
+  )
 
   t.absent(reply.error)
   t.is(reply.response.statusCode, 200)
@@ -106,7 +114,9 @@ test('destroy request', async function (t) {
 
   server.on('connection', function (socket) {
     socket.on('close', () => t.pass('server socket closed'))
-    socket.on('error', (err) => t.fail('server socket error: ' + err.message + ' (' + err.code + ')'))
+    socket.on('error', (err) =>
+      t.fail('server socket error: ' + err.message + ' (' + err.code + ')')
+    )
   })
 
   server.on('request', function (req, res) {
@@ -140,7 +150,9 @@ test('destroy response', async function (t) {
 
   server.on('connection', function (socket) {
     socket.on('close', () => t.pass('server socket closed'))
-    socket.on('error', (err) => t.fail('server socket error: ' + err.message + ' (' + err.code + ')'))
+    socket.on('error', (err) =>
+      t.fail('server socket error: ' + err.message + ' (' + err.code + ')')
+    )
   })
 
   server.on('request', function (req, res) {
@@ -174,7 +186,9 @@ test('write head', async function (t) {
 
   server.on('connection', function (socket) {
     socket.on('close', () => t.pass('server socket closed'))
-    socket.on('error', (err) => t.fail('server socket error: ' + err.message + ' (' + err.code + ')'))
+    socket.on('error', (err) =>
+      t.fail('server socket error: ' + err.message + ' (' + err.code + ')')
+    )
   })
 
   server.on('request', function (req, res) {
@@ -212,7 +226,9 @@ test('write head with headers', async function (t) {
 
   server.on('connection', function (socket) {
     socket.on('close', () => t.pass('server socket closed'))
-    socket.on('error', (err) => t.fail('server socket error: ' + err.message + ' (' + err.code + ')'))
+    socket.on('error', (err) =>
+      t.fail('server socket error: ' + err.message + ' (' + err.code + ')')
+    )
   })
 
   server.on('request', function (req, res) {
@@ -250,19 +266,27 @@ test('chunked', async function (t) {
 
   server.on('connection', function (socket) {
     socket.on('close', () => t.pass('server socket closed'))
-    socket.on('error', (err) => t.fail('server socket error: ' + err.message + ' (' + err.code + ')'))
+    socket.on('error', (err) =>
+      t.fail('server socket error: ' + err.message + ' (' + err.code + ')')
+    )
   })
 
   server.on('request', function (req, res) {
     const chunks = []
     req.on('data', (chunk) => chunks.push(chunk))
     req.on('end', () => {
-      const body = Buffer.concat(chunks.map(c => Buffer.from(c, 'hex')))
-      t.alike(body, Buffer.from('request body part 1 + request body part 2'), 'request body ended')
+      const body = Buffer.concat(chunks.map((c) => Buffer.from(c, 'hex')))
+      t.alike(
+        body,
+        Buffer.from('request body part 1 + request body part 2'),
+        'request body ended'
+      )
     })
 
     res.write('response part 1 + ')
-    setImmediate(() => { res.end('response part 2') })
+    setImmediate(() => {
+      res.end('response part 2')
+    })
 
     req.on('close', () => t.pass('server request closed'))
     res.on('close', () => t.pass('server response closed'))
@@ -271,22 +295,31 @@ test('chunked', async function (t) {
   server.listen(0)
   await waitForServer(server)
 
-  const reply = await request({
-    method: 'POST',
-    host: server.address().address,
-    port: server.address().port,
-    path: '/'
-  }, (req) => {
-    req.write('request body part 1 + ')
-    setImmediate(() => { req.end('request body part 2') })
-  })
+  const reply = await request(
+    {
+      method: 'POST',
+      host: server.address().address,
+      port: server.address().port,
+      path: '/'
+    },
+    (req) => {
+      req.write('request body part 1 + ')
+      setImmediate(() => {
+        req.end('request body part 2')
+      })
+    }
+  )
 
   t.absent(reply.error)
   t.is(reply.response.statusCode, 200)
 
   const body = Buffer.concat(reply.response.chunks)
 
-  t.alike(body, Buffer.from('response part 1 + response part 2'), 'client response ended')
+  t.alike(
+    body,
+    Buffer.from('response part 1 + response part 2'),
+    'client response ended'
+  )
 
   server.close()
 })
@@ -330,10 +363,12 @@ test('close server request/response at premature GET request closure', async fun
   const sub = t.test('')
   sub.plan(2)
 
-  const server = http.createServer((req, res) => {
-    req.on('close', () => sub.pass('request closed'))
-    res.on('close', () => sub.pass('response closed'))
-  }).listen(0)
+  const server = http
+    .createServer((req, res) => {
+      req.on('close', () => sub.pass('request closed'))
+      res.on('close', () => sub.pass('response closed'))
+    })
+    .listen(0)
 
   await waitForServer(server)
 
@@ -351,10 +386,12 @@ test('close server request/response at premature POST request closure', async fu
   const sub = t.test('')
   sub.plan(2)
 
-  const server = http.createServer((req, res) => {
-    req.on('close', () => sub.pass('request closed'))
-    res.on('close', () => sub.pass('response closed'))
-  }).listen(0)
+  const server = http
+    .createServer((req, res) => {
+      req.on('close', () => sub.pass('request closed'))
+      res.on('close', () => sub.pass('response closed'))
+    })
+    .listen(0)
 
   await waitForServer(server)
 
@@ -385,7 +422,7 @@ test('server and client do big writes', async function (t) {
     const chunks = []
     req.on('data', (chunk) => chunks.push(chunk))
     req.on('end', () => {
-      const body = Buffer.concat(chunks.map(c => Buffer.from(c, 'hex')))
+      const body = Buffer.concat(chunks.map((c) => Buffer.from(c, 'hex')))
       const expected = Buffer.concat([
         Buffer.alloc(2 * 1024 * 1024, 'qwer'),
         Buffer.alloc(2 * 1024 * 1024, 'asdf')
@@ -393,7 +430,9 @@ test('server and client do big writes', async function (t) {
       t.alike(body, expected, 'request body ended')
 
       res.write(Buffer.alloc(2 * 1024 * 1024, 'abcd'))
-      setImmediate(() => { res.end(Buffer.alloc(2 * 1024 * 1024, 'efgh')) })
+      setImmediate(() => {
+        res.end(Buffer.alloc(2 * 1024 * 1024, 'efgh'))
+      })
     })
 
     req.on('close', () => t.pass('server request closed'))
@@ -403,15 +442,20 @@ test('server and client do big writes', async function (t) {
   server.listen(0)
   await waitForServer(server)
 
-  const reply = await request({
-    method: 'POST',
-    host: server.address().address,
-    port: server.address().port,
-    path: '/'
-  }, (req) => {
-    req.write(Buffer.alloc(2 * 1024 * 1024, 'qwer'))
-    setImmediate(() => { req.end(Buffer.alloc(2 * 1024 * 1024, 'asdf')) })
-  })
+  const reply = await request(
+    {
+      method: 'POST',
+      host: server.address().address,
+      port: server.address().port,
+      path: '/'
+    },
+    (req) => {
+      req.write(Buffer.alloc(2 * 1024 * 1024, 'qwer'))
+      setImmediate(() => {
+        req.end(Buffer.alloc(2 * 1024 * 1024, 'asdf'))
+      })
+    }
+  )
 
   t.is(reply.response.statusCode, 200)
   t.ok(reply.response.ended)
@@ -438,12 +482,19 @@ test('basic protocol negotiation', async function (t) {
 
     req.on('close', () => up.pass('request closed after server upgrade event'))
 
-    req.on('data', () => t.fail('request data event listener should be detached'))
-    req.on('drain', () => t.fail('request drain event listener should be detached'))
+    req.on('data', () =>
+      t.fail('request data event listener should be detached')
+    )
+    req.on('drain', () =>
+      t.fail('request drain event listener should be detached')
+    )
     req.on('end', () => t.fail('request end event listener should be detached'))
-    req.on('error', () => t.fail('request error event listener should be detached'))
+    req.on('error', () =>
+      t.fail('request error event listener should be detached')
+    )
 
-    const handshake = 'HTTP/1.1 101 Web Socket Protocol Handshake\r\n' +
+    const handshake =
+      'HTTP/1.1 101 Web Socket Protocol Handshake\r\n' +
       'Upgrade: weird-protocol\r\n' +
       'Connection: Upgrade\r\n' +
       '\r\n' +
@@ -452,24 +503,36 @@ test('basic protocol negotiation', async function (t) {
     socket.end(handshake)
   })
 
-  const req = http.request({
-    port: server.address().port,
-    headers: {
-      Connection: 'Upgrade',
-      Upgrade: 'weird-protocol'
-    }
-  }).end('request head')
+  const req = http
+    .request({
+      port: server.address().port,
+      headers: {
+        Connection: 'Upgrade',
+        Upgrade: 'weird-protocol'
+      }
+    })
+    .end('request head')
 
   req.on('upgrade', (res, socket, head) => {
     up.alike(head, Buffer.from('server head'), 'request upgrade event')
 
     req.on('close', () => up.pass('request closed after request upgrade event'))
 
-    res.on('close', () => t.fail('response close event listener should be detached'))
-    res.on('data', () => t.fail('response data event listener should be detached'))
-    res.on('drain', () => t.fail('response drain event listener should be detached'))
-    res.on('end', () => t.fail('response end event listener should be detached'))
-    res.on('error', () => t.fail('response error event listener should be detached'))
+    res.on('close', () =>
+      t.fail('response close event listener should be detached')
+    )
+    res.on('data', () =>
+      t.fail('response data event listener should be detached')
+    )
+    res.on('drain', () =>
+      t.fail('response drain event listener should be detached')
+    )
+    res.on('end', () =>
+      t.fail('response end event listener should be detached')
+    )
+    res.on('error', () =>
+      t.fail('response error event listener should be detached')
+    )
 
     socket.end()
   })
@@ -487,7 +550,8 @@ test('close connection if missing upgrade handler', async function (t) {
   await waitForServer(server)
 
   server.on('upgrade', (req, socket, head) => {
-    const handshake = 'HTTP/1.1 101 Web Socket Protocol Handshake\r\n' +
+    const handshake =
+      'HTTP/1.1 101 Web Socket Protocol Handshake\r\n' +
       'Upgrade: weird-protocol\r\n' +
       'Connection: Upgrade\r\n' +
       '\r\n'
@@ -495,13 +559,15 @@ test('close connection if missing upgrade handler', async function (t) {
     socket.end(handshake)
   })
 
-  const req = http.request({
-    port: server.address().port,
-    headers: {
-      Connection: 'Upgrade',
-      Upgrade: 'weird-protocol'
-    }
-  }).end()
+  const req = http
+    .request({
+      port: server.address().port,
+      headers: {
+        Connection: 'Upgrade',
+        Upgrade: 'weird-protocol'
+      }
+    })
+    .end()
 
   req.on('close', () => ce.pass('connection closed'))
 
@@ -525,13 +591,17 @@ test('make requests using url', async function (t) {
   const url = `http://localhost:${server.address().port}/path`
   const expectedBuf = Buffer.from('response')
 
-  http.request(url, res => {
-    res.on('data', (data) => rqts.alike(data, expectedBuf, 'url as string'))
-  }).end()
+  http
+    .request(url, (res) => {
+      res.on('data', (data) => rqts.alike(data, expectedBuf, 'url as string'))
+    })
+    .end()
 
-  http.request(new URL(url), res => {
-    res.on('data', (data) => rqts.alike(data, expectedBuf, 'url instance'))
-  }).end()
+  http
+    .request(new URL(url), (res) => {
+      res.on('data', (data) => rqts.alike(data, expectedBuf, 'url instance'))
+    })
+    .end()
 
   await rqts
 
@@ -564,9 +634,11 @@ test('request timeout', async function (t) {
   const sub = t.test()
   sub.plan(2)
 
-  const server = http.createServer((req, res) => {
-    sub.then(() => res.end())
-  }).listen(0)
+  const server = http
+    .createServer((req, res) => {
+      sub.then(() => res.end())
+    })
+    .listen(0)
 
   await waitForServer(server)
 
@@ -655,12 +727,14 @@ test('server response timeout', async function (t) {
   const sub = t.test()
   sub.plan(2)
 
-  const server = http.createServer((req, res) => {
-    res.setTimeout(100, () => sub.pass('timeout callback'))
-    res.on('timeout', () => sub.pass('timeout event'))
+  const server = http
+    .createServer((req, res) => {
+      res.setTimeout(100, () => sub.pass('timeout callback'))
+      res.on('timeout', () => sub.pass('timeout event'))
 
-    sub.then(() => res.end())
-  }).listen(0)
+      sub.then(() => res.end())
+    })
+    .listen(0)
 
   await waitForServer(server)
 
@@ -680,7 +754,8 @@ test('cancel timeouts when has upgrade event handled', async function (t) {
   server.on('timeout', () => t.fail('timeout event'))
 
   server.on('upgrade', (req, socket, head) => {
-    const handshake = 'HTTP/1.1 101 Web Socket Protocol Handshake\r\n' +
+    const handshake =
+      'HTTP/1.1 101 Web Socket Protocol Handshake\r\n' +
       'Upgrade: weird-protocol\r\n' +
       'Connection: Upgrade\r\n' +
       '\r\n'
@@ -690,19 +765,23 @@ test('cancel timeouts when has upgrade event handled', async function (t) {
 
   await waitForServer(server)
 
-  const client = http.request({
-    port: server.address().port,
-    headers: {
-      Connection: 'Upgrade',
-      Upgrade: 'weird-protocol'
-    }
-  }).end()
+  const client = http
+    .request({
+      port: server.address().port,
+      headers: {
+        Connection: 'Upgrade',
+        Upgrade: 'weird-protocol'
+      }
+    })
+    .end()
 
   client.setTimeout(100, () => t.fail('client callback'))
   client.on('timeout', () => t.fail('client event'))
 
   let upgradedSocket
-  client.on('upgrade', (res, socket) => { upgradedSocket = socket })
+  client.on('upgrade', (res, socket) => {
+    upgradedSocket = socket
+  })
 
   setTimeout(() => {
     t.end()
@@ -792,12 +871,12 @@ test('destroy timeouted free socket', async function (t) {
   server.close()
 })
 
-function waitForServer (server) {
+function waitForServer(server) {
   return new Promise((resolve, reject) => {
     server.on('listening', done)
     server.on('error', done)
 
-    function done (error) {
+    function done(error) {
       server.removeListener('listening', done)
       server.removeListener('error', done)
       error ? reject(error) : resolve()
@@ -805,7 +884,7 @@ function waitForServer (server) {
   })
 }
 
-function request (opts, cb) {
+function request(opts, cb) {
   return new Promise((resolve) => {
     const client = http.request(opts)
 
@@ -816,7 +895,12 @@ function request (opts, cb) {
     })
 
     client.on('response', function (res) {
-      const r = result.response = { statusCode: res.statusCode, headers: res.headers, ended: false, chunks: [] }
+      const r = (result.response = {
+        statusCode: res.statusCode,
+        headers: res.headers,
+        ended: false,
+        chunks: []
+      })
       r.statusCode = res.statusCode
       res.on('data', (chunk) => r.chunks.push(chunk))
       res.on('end', () => {
@@ -825,7 +909,10 @@ function request (opts, cb) {
     })
 
     client.on('close', () => {
-      if (result.response) result.response.chunks = result.response.chunks.map(c => Buffer.from(c, 'hex'))
+      if (result.response)
+        result.response.chunks = result.response.chunks.map((c) =>
+          Buffer.from(c, 'hex')
+        )
       resolve(result)
     })
 

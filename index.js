@@ -1,25 +1,25 @@
 exports.IncomingMessage = require('./lib/incoming-message')
 exports.OutgoingMessage = require('./lib/outgoing-message')
 
-const Agent = exports.Agent = require('./lib/agent')
-exports.globalAgent = Agent.global
+exports.Agent = require('./lib/agent')
+exports.globalAgent = exports.Agent.global
 
-const Server = exports.Server = require('./lib/server')
+exports.Server = require('./lib/server')
 exports.ServerResponse = require('./lib/server-response')
 exports.ServerConnection = require('./lib/server-connection')
 
-const Request = exports.ClientRequest = require('./lib/client-request')
+exports.ClientRequest = require('./lib/client-request')
 exports.ClientConnection = require('./lib/client-connection')
 
 exports.constants = require('./lib/constants')
 
 exports.STATUS_CODES = exports.constants.status // For Node.js compatibility
 
-exports.createServer = function createServer (opts, onrequest) {
-  return new Server(opts, onrequest)
+exports.createServer = function createServer(opts, onrequest) {
+  return new exports.Server(opts, onrequest)
 }
 
-exports.request = function request (url, opts, onresponse) {
+exports.request = function request(url, opts, onresponse) {
   if (typeof opts === 'function') {
     onresponse = opts
     opts = {}
@@ -38,27 +38,31 @@ exports.request = function request (url, opts, onresponse) {
 
     // For Node.js compatibility
     opts.host = opts.hostname || opts.host
-    opts.port = typeof opts.port === 'string' ? parseInt(opts.port, 10) : opts.port
+    opts.port =
+      typeof opts.port === 'string' ? parseInt(opts.port, 10) : opts.port
   }
 
-  return new Request(opts, onresponse)
+  return new exports.ClientRequest(opts, onresponse)
 }
 
 // https://url.spec.whatwg.org/#default-port
-function defaultPort (url) {
+function defaultPort(url) {
   switch (url.protocol) {
-    case 'ftp:': return 21
+    case 'ftp:':
+      return 21
     case 'http:':
-    case 'ws:': return 80
+    case 'ws:':
+      return 80
     case 'https:':
-    case 'wss:': return 443
+    case 'wss:':
+      return 443
   }
 
   return null
 }
 
 // https://url.spec.whatwg.org/#api
-function isURL (url) {
+function isURL(url) {
   return (
     url !== null &&
     typeof url === 'object' &&

@@ -10,7 +10,7 @@ const server = http.createServer((req, res) => {
 server.listen(8080, () => {
   console.log(server.address())
 
-  const client = http.request({ port: 8080 }, res => {
+  const client = http.request({ port: 8080 }, (res) => {
     let data = ''
     res
       .on('end', () => console.log(data))
