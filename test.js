@@ -192,6 +192,7 @@ test('write head', async function (t) {
   })
 
   server.on('request', function (req, res) {
+    req.resume()
     res.writeHead(404) // TODO: should set content-length to zero?
     res.end()
 
@@ -232,6 +233,7 @@ test('write head with headers', async function (t) {
   })
 
   server.on('request', function (req, res) {
+    req.resume()
     res.writeHead(404, { 'x-custom': 1234 })
     res.end()
 
@@ -365,6 +367,7 @@ test('close server request/response at premature GET request closure', async fun
 
   const server = http
     .createServer((req, res) => {
+      req.resume()
       req.on('close', () => sub.pass('request closed'))
       res.on('close', () => sub.pass('response closed'))
     })
@@ -388,6 +391,7 @@ test('close server request/response at premature POST request closure', async fu
 
   const server = http
     .createServer((req, res) => {
+      req.resume()
       req.on('close', () => sub.pass('request closed'))
       res.on('close', () => sub.pass('response closed'))
     })
@@ -585,6 +589,7 @@ test('make requests using url', async function (t) {
   await waitForServer(server)
   server.on('request', (req, res) => {
     t.is(req.url, '/path')
+    req.resume()
     res.end('response')
   })
 
@@ -616,6 +621,7 @@ test('custom request headers', async function (t) {
   await waitForServer(server)
 
   server.on('request', (req, res) => {
+    req.resume()
     res.end()
     ht.is(req.headers['custom-header'], 'value')
   })
@@ -636,6 +642,7 @@ test('request timeout', async function (t) {
 
   const server = http
     .createServer((req, res) => {
+      req.resume()
       sub.then(() => res.end())
     })
     .listen(0)
@@ -660,7 +667,12 @@ test('server timeout', async function (t) {
   const sub = t.test()
   sub.plan(3)
 
-  const server = http.createServer((res, req) => req.end()).listen(0)
+  const server = http
+    .createServer((req, res) => {
+      req.resume()
+      res.end()
+    })
+    .listen(0)
 
   server.setTimeout(100, (socket) => {
     sub.is(typeof socket, 'object', 'callback receive socket as argument')
@@ -687,7 +699,12 @@ test('server timeout', async function (t) {
 
 test('close the server at timeout if do not have any handler', async function (t) {
   t.plan(1)
-  const server = http.createServer().listen(0).setTimeout(100)
+  const server = http
+    .createServer((req, res) => {
+      req.resume()
+    })
+    .listen(0)
+    .setTimeout(100)
 
   await waitForServer(server)
 
@@ -704,6 +721,7 @@ test('do not close the server at timeout if a handler is found', async function 
   t.plan(2)
 
   const server = http.createServer((req, res) => {
+    req.resume()
     res.on('timeout', () => {
       t.pass('response timeout')
 
@@ -729,6 +747,7 @@ test('server response timeout', async function (t) {
 
   const server = http
     .createServer((req, res) => {
+      req.resume()
       res.setTimeout(100, () => sub.pass('timeout callback'))
       res.on('timeout', () => sub.pass('timeout event'))
 
@@ -797,8 +816,12 @@ test('socket reuse', async function (t) {
   const sub = t.test()
   sub.plan(3)
 
-  const server = http.createServer().listen(0)
-  server.on('request', (req, res) => res.end('response'))
+  const server = http
+    .createServer((req, res) => {
+      req.resume()
+      res.end('response')
+    })
+    .listen(0)
 
   await waitForServer(server)
 
@@ -838,8 +861,12 @@ test('destroy timeouted free socket', async function (t) {
   const sub = t.test()
   sub.plan(1)
 
-  const server = http.createServer().listen(0)
-  server.on('request', (req, res) => res.end())
+  const server = http
+    .createServer((req, res) => {
+      req.resume()
+      res.end()
+    })
+    .listen(0)
 
   await waitForServer(server)
 
