@@ -589,7 +589,6 @@ test('make requests using url', async function (t) {
   await waitForServer(server)
   server.on('request', (req, res) => {
     t.is(req.url, '/path')
-    req.resume()
     res.end('response')
   })
 
@@ -621,7 +620,6 @@ test('custom request headers', async function (t) {
   await waitForServer(server)
 
   server.on('request', (req, res) => {
-    req.resume()
     res.end()
     ht.is(req.headers['custom-header'], 'value')
   })
@@ -642,7 +640,6 @@ test('request timeout', async function (t) {
 
   const server = http
     .createServer((req, res) => {
-      req.resume()
       sub.then(() => res.end())
     })
     .listen(0)
@@ -669,7 +666,6 @@ test('server timeout', async function (t) {
 
   const server = http
     .createServer((req, res) => {
-      req.resume()
       res.end()
     })
     .listen(0)
@@ -699,12 +695,7 @@ test('server timeout', async function (t) {
 
 test('close the server at timeout if do not have any handler', async function (t) {
   t.plan(1)
-  const server = http
-    .createServer((req, res) => {
-      req.resume()
-    })
-    .listen(0)
-    .setTimeout(100)
+  const server = http.createServer().listen(0).setTimeout(100)
 
   await waitForServer(server)
 
@@ -721,7 +712,6 @@ test('do not close the server at timeout if a handler is found', async function 
   t.plan(2)
 
   const server = http.createServer((req, res) => {
-    req.resume()
     res.on('timeout', () => {
       t.pass('response timeout')
 
@@ -747,7 +737,6 @@ test('server response timeout', async function (t) {
 
   const server = http
     .createServer((req, res) => {
-      req.resume()
       res.setTimeout(100, () => sub.pass('timeout callback'))
       res.on('timeout', () => sub.pass('timeout event'))
 
@@ -818,7 +807,6 @@ test('socket reuse', async function (t) {
 
   const server = http
     .createServer((req, res) => {
-      req.resume()
       res.end('response')
     })
     .listen(0)
@@ -863,7 +851,6 @@ test('destroy timeouted free socket', async function (t) {
 
   const server = http
     .createServer((req, res) => {
-      req.resume()
       res.end()
     })
     .listen(0)
