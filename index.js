@@ -12,6 +12,7 @@ exports.ClientRequest = require('./lib/client-request')
 exports.ClientConnection = require('./lib/client-connection')
 
 exports.constants = require('./lib/constants')
+exports.errors = require('./lib/errors')
 
 exports.STATUS_CODES = exports.constants.status // For Node.js compatibility
 
