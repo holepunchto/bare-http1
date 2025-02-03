@@ -13,25 +13,31 @@ import constants, {
   HTTPStatusCode,
   HTTPStatusMessage
 } from './lib/constants'
+import HTTPError from './lib/errors'
 
-interface HTTPIncomingMessageEvents extends ReadableEvents {
+export {
+  constants,
+  type HTTPMethod,
+  type HTTPStatusCode,
+  type HTTPStatusMessage,
+  type HTTPError,
+  HTTPError as errors
+}
+
+export interface HTTPIncomingMessageEvents extends ReadableEvents {
   timeout: []
 }
 
-interface HTTPIncomingMessageOptions {
+export interface HTTPIncomingMessageOptions {
   method?: HTTPMethod
   url?: URL | string
   statusCode?: HTTPStatusCode
   statusMessage?: HTTPStatusMessage
 }
 
-declare class HTTPIncomingMessage extends Readable<HTTPIncomingMessageEvents> {
-  constructor(
-    socket?: TCPSocket,
-    headers?: Record<string, string | number>,
-    opts?: HTTPIncomingMessageOptions
-  )
-
+export interface HTTPIncomingMessage<
+  M extends HTTPIncomingMessageEvents = HTTPIncomingMessageEvents
+> extends Readable<M> {
   readonly socket: TCPSocket
   readonly headers: Record<string, string | number>
   readonly upgrade: boolean
@@ -51,15 +57,21 @@ declare class HTTPIncomingMessage extends Readable<HTTPIncomingMessageEvents> {
   setTimeout(ms: number, ontimeout?: () => void): this
 }
 
-interface HTTPOutgoingMessageEvents extends WritableEvents {
+export class HTTPIncomingMessage {
+  constructor(
+    socket?: TCPSocket,
+    headers?: Record<string, string | number>,
+    opts?: HTTPIncomingMessageOptions
+  )
+}
+
+export interface HTTPOutgoingMessageEvents extends WritableEvents {
   timeout: []
 }
 
-declare class HTTPOutgoingMessage<
+export interface HTTPOutgoingMessage<
   M extends HTTPOutgoingMessageEvents = HTTPOutgoingMessageEvents
 > extends Writable<M> {
-  constructor(socket?: TCPSocket)
-
   readonly socket: TCPSocket
   readonly headers: Record<string, string | number>
   readonly headersSent: boolean
@@ -74,16 +86,16 @@ declare class HTTPOutgoingMessage<
   setTimeout(ms: number, ontimeout?: () => void): this
 }
 
-interface HTTPAgentOptions {
+export class HTTPOutgoingMessage {
+  constructor(socket?: TCPSocket)
+}
+
+export interface HTTPAgentOptions {
   keepAlive?: boolean
   keepAliveMsecs?: number
 }
 
-declare class HTTPAgent {
-  constructor(
-    opts?: HTTPAgentOptions & TCPSocketOptions & TCPSocketConnectOptions
-  )
-
+export interface HTTPAgent {
   createConnection(opts?: TCPSocketOptions & TCPSocketConnectOptions): TCPSocket
 
   reuseSocket(socket: TCPSocket, req?: HTTPClientRequest): void
@@ -98,35 +110,43 @@ declare class HTTPAgent {
   ): void
 
   destroy(): void
+}
+
+export class HTTPAgent {
+  constructor(
+    opts?: HTTPAgentOptions & TCPSocketOptions & TCPSocketConnectOptions
+  )
 
   static global: HTTPAgent
 }
 
-interface HTTPServerEvents extends TCPServerEvents {
+export const globalAgent: HTTPAgent
+
+export interface HTTPServerEvents extends TCPServerEvents {
   request: [req: HTTPIncomingMessage, res: HTTPServerResponse]
   upgrade: [req: HTTPIncomingMessage, socket: TCPSocket, head: Buffer]
   timeout: [socket: TCPSocket]
 }
 
-declare class HTTPServer<
-  M extends HTTPServerEvents = HTTPServerEvents
-> extends TCPServer<M> {
-  constructor(
-    opts?: HTTPServerConnectionOptions,
-    onrequest?: (req: HTTPIncomingMessage, res: HTTPServerResponse) => void
-  )
-  constructor(
-    onrequest: (req: HTTPIncomingMessage, res: HTTPServerResponse) => void
-  )
-
+export interface HTTPServer<M extends HTTPServerEvents = HTTPServerEvents>
+  extends TCPServer<M> {
   readonly timeout: number | undefined
 
   setTimeout(ms: number, ontimeout?: () => void): this
 }
 
-declare class HTTPServerResponse extends HTTPOutgoingMessage {
-  constructor(socket: TCPSocket, req: HTTPIncomingMessage, close: boolean)
+export class HTTPServer {
+  constructor(
+    opts?: HTTPServerConnectionOptions,
+    onrequest?: (req: HTTPIncomingMessage, res: HTTPServerResponse) => void
+  )
 
+  constructor(
+    onrequest: (req: HTTPIncomingMessage, res: HTTPServerResponse) => void
+  )
+}
+
+export interface HTTPServerResponse extends HTTPOutgoingMessage {
   readonly req: HTTPIncomingMessage
   readonly statusCode: HTTPStatusCode
   readonly statusMessage: HTTPStatusMessage | null
@@ -143,18 +163,16 @@ declare class HTTPServerResponse extends HTTPOutgoingMessage {
   ): void
 }
 
-interface HTTPServerConnectionOptions {
+export class HTTPServerResponse {
+  constructor(socket: TCPSocket, req: HTTPIncomingMessage, close: boolean)
+}
+
+export interface HTTPServerConnectionOptions {
   IncomingMessage?: typeof HTTPIncomingMessage
   ServerResponse?: typeof HTTPServerResponse
 }
 
-declare class HTTPServerConnection {
-  constructor(
-    server: HTTPServer,
-    socket: TCPSocket,
-    opts?: HTTPServerConnectionOptions
-  )
-
+export interface HTTPServerConnection {
   readonly server: HTTPServer
   readonly socket: TCPSocket
 
@@ -162,110 +180,89 @@ declare class HTTPServerConnection {
   readonly res: HTTPServerResponse | null
 
   readonly idle: boolean
+}
+
+export class HTTPServerConnection {
+  constructor(
+    server: HTTPServer,
+    socket: TCPSocket,
+    opts?: HTTPServerConnectionOptions
+  )
 
   static for(socket: TCPSocket): HTTPServerConnection
 }
 
-interface HTTPClientRequestEvents extends HTTPOutgoingMessageEvents {
+export interface HTTPClientRequestEvents extends HTTPOutgoingMessageEvents {
   response: [res: HTTPIncomingMessage]
   upgrade: [res: HTTPIncomingMessage, socket: TCPSocket, head: Buffer]
 }
 
-interface HTTPClientRequestOptions extends TCPSocketConnectOptions {
+export interface HTTPClientRequestOptions extends TCPSocketConnectOptions {
   agent?: HTTPAgent | false
   headers?: Record<string, string | number>
   method?: HTTPMethod
   path?: string
 }
 
-declare class HTTPClientRequest<
+export interface HTTPClientRequest<
   M extends HTTPClientRequestEvents = HTTPClientRequestEvents
 > extends HTTPOutgoingMessage<M> {
-  constructor(opts?: HTTPClientRequestOptions, onresponse?: () => void)
-  constructor(onresponse: () => void)
-
   readonly method: HTTPMethod
   readonly path: string
   readonly headers: Record<string, string | number>
 }
 
-interface HTTPClientConnectionOptions {
+export class HTTPClientRequest {
+  constructor(opts?: HTTPClientRequestOptions, onresponse?: () => void)
+
+  constructor(onresponse: () => void)
+}
+
+export interface HTTPClientConnectionOptions {
   IncomingMessage?: typeof HTTPIncomingMessage
 }
 
-declare class HTTPClientConnection {
-  constructor(socket: TCPSocket, opts?: HTTPClientConnectionOptions)
-
+export interface HTTPClientConnection {
   readonly socket: TCPSocket
 
   readonly req: HTTPClientRequest | null
   readonly res: HTTPIncomingMessage | null
 
   readonly idle: boolean
+}
+
+export class HTTPClientConnection {
+  constructor(socket: TCPSocket, opts?: HTTPClientConnectionOptions)
 
   static for(socket: TCPSocket): HTTPClientConnection | null
+
   static from(
     socket: TCPSocket,
     opts?: HTTPClientConnectionOptions
   ): HTTPClientConnection
 }
 
-declare function createServer(
+export function createServer(
   opts?: HTTPServerConnectionOptions,
   onrequest?: (req: HTTPIncomingMessage, res: HTTPServerResponse) => void
 ): HTTPServer
 
-declare function createServer(
+export function createServer(
   onrequest: (req: HTTPIncomingMessage, res: HTTPServerResponse) => void
 ): HTTPServer
 
-declare function request(
+export function request(
   url: URL | string,
   opts?: HTTPClientRequestOptions,
   onresponse?: (res: HTTPIncomingMessage) => void
 ): HTTPClientRequest
 
-declare function request(
+export function request(
   url: URL | string,
   onresponse: (res: HTTPIncomingMessage) => void
 ): HTTPClientRequest
 
-declare function request(
+export function request(
   opts: HTTPClientRequestOptions,
   onresponse?: (res: HTTPIncomingMessage) => void
 ): HTTPClientRequest
-
-declare class HTTPError extends Error {
-  constructor(msg: string, code: string, fn: Error)
-
-  static NOT_IMPLEMENTED(msg?: string): HTTPError
-  static CONNECTION_LOST(msg?: string): HTTPError
-}
-
-export {
-  HTTPIncomingMessage as IncomingMessage,
-  type HTTPIncomingMessageEvents,
-  type HTTPIncomingMessageOptions,
-  HTTPOutgoingMessage as OutgoingMessage,
-  type HTTPOutgoingMessageEvents,
-  HTTPAgent as Agent,
-  HTTPAgent as globalAgent,
-  type HTTPAgentOptions,
-  HTTPServer as Server,
-  type HTTPServerEvents,
-  HTTPServerResponse as ServerResponse,
-  HTTPServerConnection as ServerConnection,
-  type HTTPServerConnectionOptions,
-  HTTPClientRequest as ClientRequest,
-  type HTTPClientRequestEvents,
-  type HTTPClientRequestOptions,
-  HTTPClientConnection as ClientConnection,
-  type HTTPClientConnectionOptions,
-  createServer,
-  request,
-  constants,
-  type HTTPMethod,
-  type HTTPStatusCode,
-  type HTTPStatusMessage,
-  HTTPError as errors
-}
