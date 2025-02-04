@@ -24,6 +24,8 @@ export {
   HTTPError as errors
 }
 
+export const STATUS_CODES: typeof constants.status
+
 export interface HTTPIncomingMessageEvents extends ReadableEvents {
   timeout: []
 }
@@ -65,6 +67,8 @@ export class HTTPIncomingMessage {
   )
 }
 
+export { HTTPIncomingMessage as IncomingMessage }
+
 export interface HTTPOutgoingMessageEvents extends WritableEvents {
   timeout: []
 }
@@ -89,6 +93,8 @@ export interface HTTPOutgoingMessage<
 export class HTTPOutgoingMessage {
   constructor(socket?: TCPSocket)
 }
+
+export { HTTPOutgoingMessage as OutgoingMessage }
 
 export interface HTTPAgentOptions {
   keepAlive?: boolean
@@ -122,6 +128,8 @@ export class HTTPAgent {
 
 export const globalAgent: HTTPAgent
 
+export { HTTPAgent as Agent }
+
 export interface HTTPServerEvents extends TCPServerEvents {
   request: [req: HTTPIncomingMessage, res: HTTPServerResponse]
   upgrade: [req: HTTPIncomingMessage, socket: TCPSocket, head: Buffer]
@@ -146,6 +154,8 @@ export class HTTPServer {
   )
 }
 
+export { HTTPServer as Server }
+
 export interface HTTPServerResponse extends HTTPOutgoingMessage {
   readonly req: HTTPIncomingMessage
   readonly statusCode: HTTPStatusCode
@@ -166,6 +176,8 @@ export interface HTTPServerResponse extends HTTPOutgoingMessage {
 export class HTTPServerResponse {
   constructor(socket: TCPSocket, req: HTTPIncomingMessage, close: boolean)
 }
+
+export { HTTPServerResponse as ServerResponse }
 
 export interface HTTPServerConnectionOptions {
   IncomingMessage?: typeof HTTPIncomingMessage
@@ -191,6 +203,8 @@ export class HTTPServerConnection {
 
   static for(socket: TCPSocket): HTTPServerConnection
 }
+
+export { HTTPServerConnection as ServerConnection }
 
 export interface HTTPClientRequestEvents extends HTTPOutgoingMessageEvents {
   response: [res: HTTPIncomingMessage]
@@ -218,6 +232,8 @@ export class HTTPClientRequest {
   constructor(onresponse: () => void)
 }
 
+export { HTTPClientRequest as ClientRequest }
+
 export interface HTTPClientConnectionOptions {
   IncomingMessage?: typeof HTTPIncomingMessage
 }
@@ -241,6 +257,8 @@ export class HTTPClientConnection {
     opts?: HTTPClientConnectionOptions
   ): HTTPClientConnection
 }
+
+export { HTTPClientConnection as ClientConnection }
 
 export function createServer(
   opts?: HTTPServerConnectionOptions,
