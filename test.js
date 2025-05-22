@@ -885,7 +885,25 @@ test('destroy timeouted free socket', async function (t) {
   server.close()
 })
 
-test.solo('host 0.0.0.0', async function (t) {
+test.solo('host 127.0.0.1', async function (t) {
+  t = t.test('subtest')
+  t.plan(1)
+
+  const server = http.createServer((req, res) => res.end())
+
+  server.listen(0, '127.0.0.1', () => {
+    const { port } = server.address()
+
+    const client = http.request({ port }, () => t.pass())
+    client.end()
+  })
+
+  await t
+
+  server.close()
+})
+
+test('host 0.0.0.0', async function (t) {
   t = t.test('subtest')
   t.plan(1)
 
