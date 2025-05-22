@@ -894,7 +894,7 @@ test.solo('host 127.0.0.1', async function (t) {
   server.listen(0, '127.0.0.1', () => {
     const { port } = server.address()
 
-    const client = http.request({ port }, () => t.pass())
+    const client = http.request({ port, host: '127.0.0.1' }, () => t.pass())
     client.end()
   })
 
@@ -903,7 +903,7 @@ test.solo('host 127.0.0.1', async function (t) {
   server.close()
 })
 
-test('host 0.0.0.0', async function (t) {
+test.solo('host 0.0.0.0', async function (t) {
   t = t.test('subtest')
   t.plan(1)
 
@@ -912,7 +912,7 @@ test('host 0.0.0.0', async function (t) {
   server.listen(0, '0.0.0.0', () => {
     const { port } = server.address()
 
-    const client = http.request({ port }, () => t.pass())
+    const client = http.request({ port, host: '0.0.0.0' }, () => t.pass())
     client.end()
   })
 
