@@ -24,6 +24,7 @@ export {
   HTTPError as errors
 }
 
+export const METHODS: typeof constants.methods
 export const STATUS_CODES: typeof constants.status
 
 export interface HTTPIncomingMessageEvents extends ReadableEvents {
