@@ -6,17 +6,17 @@ declare const constants: {
     BEFORE_CHUNK: number
     IN_CHUNK: number
   }
-  methods: [
-    'GET',
-    'HEAD',
-    'POST',
-    'PUT',
-    'DELETE',
-    'CONNECT',
-    'OPTIONS',
-    'TRACE',
-    'PATCH'
-  ]
+  method: {
+    GET: 'GET'
+    HEAD: 'HEAD'
+    POST: 'POST'
+    PUT: 'PUT'
+    DELETE: 'DELETE'
+    CONNECT: 'CONNECT'
+    OPTIONS: 'OPTIONS'
+    TRACE: 'TRACE'
+    PATCH: 'PATCH'
+  }
   status: {
     100: 'Continue'
     101: 'Switching Protocols'
@@ -85,7 +85,7 @@ declare const constants: {
 }
 
 declare namespace constants {
-  export type HTTPMethod = (typeof constants.method)[number]
+  export type HTTPMethod = keyof typeof constants.method
   export type HTTPStatusCode = keyof typeof constants.status
   export type HTTPStatusMessage = (typeof constants.status)[HTTPStatusCode]
 }
