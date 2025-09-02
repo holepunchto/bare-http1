@@ -14,6 +14,7 @@ exports.ClientConnection = require('./lib/client-connection')
 exports.constants = require('./lib/constants')
 exports.errors = require('./lib/errors')
 
+exports.METHODS = Object.values(exports.constants.method) // For Node.js compatibility
 exports.STATUS_CODES = exports.constants.status // For Node.js compatibility
 
 exports.createServer = function createServer(opts, onrequest) {
