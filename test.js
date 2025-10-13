@@ -193,7 +193,7 @@ test('write head', async function (t) {
 
   server.on('request', function (req, res) {
     req.resume()
-    res.writeHead(404) // TODO: should set content-length to zero?
+    res.writeHead(404)
     res.end()
 
     req.on('close', () => t.pass('server request closed'))

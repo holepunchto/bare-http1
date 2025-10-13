@@ -1,11 +1,4 @@
 declare const constants: {
-  state: {
-    BEFORE_HEAD: number
-    IN_HEAD: number
-    IN_BODY: number
-    BEFORE_CHUNK: number
-    IN_CHUNK: number
-  }
   method: {
     GET: 'GET'
     HEAD: 'HEAD'
