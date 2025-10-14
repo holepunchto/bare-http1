@@ -40,8 +40,7 @@ exports.request = function request(url, opts, onresponse) {
 
     // For Node.js compatibility
     opts.host = opts.hostname || opts.host
-    opts.port =
-      typeof opts.port === 'string' ? parseInt(opts.port, 10) : opts.port
+    opts.port = typeof opts.port === 'string' ? parseInt(opts.port, 10) : opts.port
   }
 
   return new exports.ClientRequest(opts, onresponse)

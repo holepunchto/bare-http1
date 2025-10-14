@@ -27,10 +27,7 @@ test('basic', async function (t) {
     t.ok(req)
     t.is(req.method, 'POST')
     t.is(req.url, '/something/?key1=value1&key2=value2&enabled')
-    t.is(
-      req.headers.host,
-      server.address().address + ':' + server.address().port
-    )
+    t.is(req.headers.host, server.address().address + ':' + server.address().port)
     t.ok(req.socket)
 
     t.ok(res)
@@ -278,11 +275,7 @@ test('chunked', async function (t) {
     req.on('data', (chunk) => chunks.push(chunk))
     req.on('end', () => {
       const body = Buffer.concat(chunks.map((c) => Buffer.from(c, 'hex')))
-      t.alike(
-        body,
-        Buffer.from('request body part 1 + request body part 2'),
-        'request body ended'
-      )
+      t.alike(body, Buffer.from('request body part 1 + request body part 2'), 'request body ended')
     })
 
     res.write('response part 1 + ')
@@ -317,11 +310,7 @@ test('chunked', async function (t) {
 
   const body = Buffer.concat(reply.response.chunks)
 
-  t.alike(
-    body,
-    Buffer.from('response part 1 + response part 2'),
-    'client response ended'
-  )
+  t.alike(body, Buffer.from('response part 1 + response part 2'), 'client response ended')
 
   server.close()
 })
@@ -486,16 +475,10 @@ test('basic protocol negotiation', async function (t) {
 
     req.on('close', () => up.pass('request closed after server upgrade event'))
 
-    req.on('data', () =>
-      t.fail('request data event listener should be detached')
-    )
-    req.on('drain', () =>
-      t.fail('request drain event listener should be detached')
-    )
+    req.on('data', () => t.fail('request data event listener should be detached'))
+    req.on('drain', () => t.fail('request drain event listener should be detached'))
     req.on('end', () => t.fail('request end event listener should be detached'))
-    req.on('error', () =>
-      t.fail('request error event listener should be detached')
-    )
+    req.on('error', () => t.fail('request error event listener should be detached'))
 
     const handshake =
       'HTTP/1.1 101 Web Socket Protocol Handshake\r\n' +
@@ -522,21 +505,11 @@ test('basic protocol negotiation', async function (t) {
 
     req.on('close', () => up.pass('request closed after request upgrade event'))
 
-    res.on('close', () =>
-      t.fail('response close event listener should be detached')
-    )
-    res.on('data', () =>
-      t.fail('response data event listener should be detached')
-    )
-    res.on('drain', () =>
-      t.fail('response drain event listener should be detached')
-    )
-    res.on('end', () =>
-      t.fail('response end event listener should be detached')
-    )
-    res.on('error', () =>
-      t.fail('response error event listener should be detached')
-    )
+    res.on('close', () => t.fail('response close event listener should be detached'))
+    res.on('data', () => t.fail('response data event listener should be detached'))
+    res.on('drain', () => t.fail('response drain event listener should be detached'))
+    res.on('end', () => t.fail('response end event listener should be detached'))
+    res.on('error', () => t.fail('response error event listener should be detached'))
 
     socket.end()
   })
@@ -924,9 +897,7 @@ function request(opts, cb) {
 
     client.on('close', () => {
       if (result.response)
-        result.response.chunks = result.response.chunks.map((c) =>
-          Buffer.from(c, 'hex')
-        )
+        result.response.chunks = result.response.chunks.map((c) => Buffer.from(c, 'hex'))
       resolve(result)
     })
 

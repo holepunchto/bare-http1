@@ -8,11 +8,7 @@ import {
 } from 'bare-tcp'
 import Buffer from 'bare-buffer'
 import URL from 'bare-url'
-import constants, {
-  HTTPMethod,
-  HTTPStatusCode,
-  HTTPStatusMessage
-} from './lib/constants'
+import constants, { HTTPMethod, HTTPStatusCode, HTTPStatusMessage } from './lib/constants'
 import HTTPError from './lib/errors'
 
 export {
@@ -111,18 +107,13 @@ export interface HTTPAgent {
 
   getName(opts: { host: string; port: number }): string
 
-  addRequest(
-    req: HTTPClientRequest,
-    opts: TCPSocketOptions & TCPSocketConnectOptions
-  ): void
+  addRequest(req: HTTPClientRequest, opts: TCPSocketOptions & TCPSocketConnectOptions): void
 
   destroy(): void
 }
 
 export class HTTPAgent {
-  constructor(
-    opts?: HTTPAgentOptions & TCPSocketOptions & TCPSocketConnectOptions
-  )
+  constructor(opts?: HTTPAgentOptions & TCPSocketOptions & TCPSocketConnectOptions)
 
   static global: HTTPAgent
 }
@@ -137,8 +128,7 @@ export interface HTTPServerEvents extends TCPServerEvents {
   timeout: [socket: TCPSocket]
 }
 
-export interface HTTPServer<M extends HTTPServerEvents = HTTPServerEvents>
-  extends TCPServer<M> {
+export interface HTTPServer<M extends HTTPServerEvents = HTTPServerEvents> extends TCPServer<M> {
   readonly timeout: number | undefined
 
   setTimeout(ms: number, ontimeout?: () => void): this
@@ -150,9 +140,7 @@ export class HTTPServer {
     onrequest?: (req: HTTPIncomingMessage, res: HTTPServerResponse) => void
   )
 
-  constructor(
-    onrequest: (req: HTTPIncomingMessage, res: HTTPServerResponse) => void
-  )
+  constructor(onrequest: (req: HTTPIncomingMessage, res: HTTPServerResponse) => void)
 }
 
 export { HTTPServer as Server }
@@ -168,10 +156,7 @@ export interface HTTPServerResponse extends HTTPOutgoingMessage {
     headers?: Record<string, string | number>
   ): void
 
-  writeHead(
-    statusCode: HTTPStatusCode,
-    headers?: Record<string, string | number>
-  ): void
+  writeHead(statusCode: HTTPStatusCode, headers?: Record<string, string | number>): void
 }
 
 export class HTTPServerResponse {
@@ -194,11 +179,7 @@ export interface HTTPServerConnection {
 }
 
 export class HTTPServerConnection {
-  constructor(
-    server: HTTPServer,
-    socket: TCPSocket,
-    opts?: HTTPServerConnectionOptions
-  )
+  constructor(server: HTTPServer, socket: TCPSocket, opts?: HTTPServerConnectionOptions)
 
   static for(socket: TCPSocket): HTTPServerConnection
 }
@@ -217,9 +198,8 @@ export interface HTTPClientRequestOptions extends TCPSocketConnectOptions {
   path?: string
 }
 
-export interface HTTPClientRequest<
-  M extends HTTPClientRequestEvents = HTTPClientRequestEvents
-> extends HTTPOutgoingMessage<M> {
+export interface HTTPClientRequest<M extends HTTPClientRequestEvents = HTTPClientRequestEvents>
+  extends HTTPOutgoingMessage<M> {
   readonly method: HTTPMethod
   readonly path: string
   readonly headers: Record<string, string | number>
@@ -251,10 +231,7 @@ export class HTTPClientConnection {
 
   static for(socket: TCPSocket): HTTPClientConnection | null
 
-  static from(
-    socket: TCPSocket,
-    opts?: HTTPClientConnectionOptions
-  ): HTTPClientConnection
+  static from(socket: TCPSocket, opts?: HTTPClientConnectionOptions): HTTPClientConnection
 }
 
 export { HTTPClientConnection as ClientConnection }
