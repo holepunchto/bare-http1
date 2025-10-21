@@ -43,8 +43,7 @@ exports.request = function request(url, opts, onresponse) {
     opts.port = typeof opts.port === 'string' ? parseInt(opts.port, 10) : opts.port
   }
 
-  // TODO: Renable the default global agent when hangs have been sorted
-  opts.agent = opts.agent || new exports.Agent()
+  opts.allowHalfOpen = false
 
   return new exports.ClientRequest(opts, onresponse)
 }
