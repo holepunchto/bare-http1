@@ -43,8 +43,6 @@ exports.request = function request(url, opts, onresponse) {
     opts.port = typeof opts.port === 'string' ? parseInt(opts.port, 10) : opts.port
   }
 
-  opts.allowHalfOpen = false
-
   return new exports.ClientRequest(opts, onresponse)
 }
 
