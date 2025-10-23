@@ -176,6 +176,8 @@ export interface HTTPServerConnection {
 
   readonly req: HTTPIncomingMessage | null
   readonly res: HTTPServerResponse | null
+
+  readonly idle: boolean
 }
 
 export class HTTPServerConnection {
