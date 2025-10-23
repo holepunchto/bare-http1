@@ -858,6 +858,39 @@ test('destroy timeouted free socket', async function (t) {
   server.close()
 })
 
+test('consecutive servers using the same port', async function (t) {
+  t.plan(2)
+
+  let server
+  let close
+
+  server = http.createServer((req, res) => res.end()).listen(0)
+  await waitForServer(server)
+
+  const { port } = server.address()
+
+  await request({ port })
+
+  close = t.test('first server close')
+  close.plan(1)
+
+  server.close(() => close.pass())
+
+  await close
+
+  server = http.createServer((req, res) => res.end()).listen(port)
+  await waitForServer(server)
+
+  await request({ port })
+
+  close = t.test('second server close')
+  close.plan(1)
+
+  server.close(() => close.pass())
+
+  await close
+})
+
 function waitForServer(server) {
   return new Promise((resolve, reject) => {
     server.on('listening', done)
