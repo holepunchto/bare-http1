@@ -56,7 +56,7 @@ export interface HTTPIncomingMessage<
   setTimeout(ms: number, ontimeout?: () => void): this
 }
 
-export class HTTPIncomingMessage {
+class HTTPIncomingMessage {
   constructor(
     socket?: TCPSocket,
     headers?: Record<string, string | number>,
@@ -87,7 +87,7 @@ export interface HTTPOutgoingMessage<
   setTimeout(ms: number, ontimeout?: () => void): this
 }
 
-export class HTTPOutgoingMessage {
+class HTTPOutgoingMessage {
   constructor(socket?: TCPSocket)
 }
 
@@ -112,7 +112,7 @@ export interface HTTPAgent {
   destroy(): void
 }
 
-export class HTTPAgent {
+class HTTPAgent {
   constructor(opts?: HTTPAgentOptions & TCPSocketOptions & TCPSocketConnectOptions)
 
   static global: HTTPAgent
@@ -134,7 +134,7 @@ export interface HTTPServer<M extends HTTPServerEvents = HTTPServerEvents> exten
   setTimeout(ms: number, ontimeout?: () => void): this
 }
 
-export class HTTPServer {
+class HTTPServer {
   constructor(
     opts?: HTTPServerConnectionOptions,
     onrequest?: (req: HTTPIncomingMessage, res: HTTPServerResponse) => void
@@ -159,7 +159,7 @@ export interface HTTPServerResponse extends HTTPOutgoingMessage {
   writeHead(statusCode: HTTPStatusCode, headers?: Record<string, string | number>): void
 }
 
-export class HTTPServerResponse {
+class HTTPServerResponse {
   constructor(socket: TCPSocket, req: HTTPIncomingMessage, close: boolean)
 }
 
@@ -180,7 +180,7 @@ export interface HTTPServerConnection {
   readonly idle: boolean
 }
 
-export class HTTPServerConnection {
+class HTTPServerConnection {
   constructor(server: HTTPServer, socket: TCPSocket, opts?: HTTPServerConnectionOptions)
 
   static for(socket: TCPSocket): HTTPServerConnection
@@ -207,7 +207,7 @@ export interface HTTPClientRequest<M extends HTTPClientRequestEvents = HTTPClien
   readonly headers: Record<string, string | number>
 }
 
-export class HTTPClientRequest {
+class HTTPClientRequest {
   constructor(opts?: HTTPClientRequestOptions, onresponse?: () => void)
 
   constructor(onresponse: () => void)
@@ -228,7 +228,7 @@ export interface HTTPClientConnection {
   readonly idle: boolean
 }
 
-export class HTTPClientConnection {
+class HTTPClientConnection {
   constructor(socket: TCPSocket, opts?: HTTPClientConnectionOptions)
 
   static for(socket: TCPSocket): HTTPClientConnection | null
