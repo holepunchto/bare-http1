@@ -56,7 +56,7 @@ export interface HTTPIncomingMessage<
   setTimeout(ms: number, ontimeout?: () => void): this
 }
 
-class HTTPIncomingMessage {
+class HTTPIncomingMessage extends Readable {
   constructor(
     socket?: TCPSocket,
     headers?: Record<string, string | number>,
@@ -87,7 +87,7 @@ export interface HTTPOutgoingMessage<
   setTimeout(ms: number, ontimeout?: () => void): this
 }
 
-class HTTPOutgoingMessage {
+class HTTPOutgoingMessage extends Writable {
   constructor(socket?: TCPSocket)
 }
 
@@ -134,7 +134,7 @@ export interface HTTPServer<M extends HTTPServerEvents = HTTPServerEvents> exten
   setTimeout(ms: number, ontimeout?: () => void): this
 }
 
-class HTTPServer {
+class HTTPServer extends TCPServer {
   constructor(
     opts?: HTTPServerConnectionOptions,
     onrequest?: (req: HTTPIncomingMessage, res: HTTPServerResponse) => void
@@ -159,7 +159,7 @@ export interface HTTPServerResponse extends HTTPOutgoingMessage {
   writeHead(statusCode: HTTPStatusCode, headers?: Record<string, string | number>): void
 }
 
-class HTTPServerResponse {
+class HTTPServerResponse extends HTTPOutgoingMessage {
   constructor(socket: TCPSocket, req: HTTPIncomingMessage, close: boolean)
 }
 
@@ -207,7 +207,7 @@ export interface HTTPClientRequest<M extends HTTPClientRequestEvents = HTTPClien
   readonly headers: Record<string, string | number>
 }
 
-class HTTPClientRequest {
+class HTTPClientRequest extends HTTPOutgoingMessage {
   constructor(opts?: HTTPClientRequestOptions, onresponse?: () => void)
 
   constructor(onresponse: () => void)
