@@ -786,8 +786,7 @@ test('socket reuse', async function (t) {
 
   await waitForServer(server)
 
-  const { port } = server.address()
-  const agent = new http.Agent({ port, keepAlive: true })
+  const agent = new http.Agent({ port: server.address().port, keepAlive: true })
 
   let socket
 
@@ -830,11 +829,7 @@ test('destroy timeouted free socket', async function (t) {
 
   await waitForServer(server)
 
-  const agent = new http.Agent({
-    port: server.address().port,
-    keepAlive: true,
-    timeout: 500
-  })
+  const agent = new http.Agent({ port: server.address().port, keepAlive: true, timeout: 500 })
 
   let socket
 
