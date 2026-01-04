@@ -585,6 +585,35 @@ test('make requests using url', async function (t) {
   server.close()
 })
 
+test('get request', async function (t) {
+  const rqts = t.test('get requests')
+  t.plan(4)
+  rqts.plan(2)
+
+  const server = http.createServer().listen(0)
+  await waitForServer(server)
+  server.on('request', (req, res) => {
+    t.is(req.url, '/path', 'got path')
+    t.is(req.method, 'GET', 'GET')
+    res.end('response')
+  })
+
+  const url = `http://localhost:${server.address().port}/path`
+  const expectedBuf = Buffer.from('response')
+
+  http.get(url, (res) => {
+    res.on('data', (data) => rqts.alike(data, expectedBuf, 'url as string'))
+  })
+
+  http.get(new URL(url), (res) => {
+    res.on('data', (data) => rqts.alike(data, expectedBuf, 'url instance'))
+  })
+
+  await rqts
+
+  server.close()
+})
+
 test('custom request headers', async function (t) {
   const ht = t.test('headers')
   ht.plan(1)

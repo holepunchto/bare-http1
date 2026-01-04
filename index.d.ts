@@ -253,6 +253,12 @@ export function request(
   onresponse?: (res: HTTPIncomingMessage) => void
 ): HTTPClientRequest
 
+export function get(
+  url: URL | string,
+  opts?: HTTPClientRequestOptions,
+  onresponse?: (res: HTTPIncomingMessage) => void
+): HTTPClientRequest
+
 export function request(
   url: URL | string,
   onresponse: (res: HTTPIncomingMessage) => void
