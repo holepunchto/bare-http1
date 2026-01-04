@@ -200,8 +200,9 @@ export interface HTTPClientRequestOptions extends TCPSocketConnectOptions {
   path?: string
 }
 
-export interface HTTPClientRequest<M extends HTTPClientRequestEvents = HTTPClientRequestEvents>
-  extends HTTPOutgoingMessage<M> {
+export interface HTTPClientRequest<
+  M extends HTTPClientRequestEvents = HTTPClientRequestEvents
+> extends HTTPOutgoingMessage<M> {
   readonly method: HTTPMethod
   readonly path: string
   readonly headers: Record<string, string | number>
