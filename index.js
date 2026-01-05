@@ -46,6 +46,12 @@ exports.request = function request(url, opts, onresponse) {
   return new exports.ClientRequest(opts, onresponse)
 }
 
+exports.get = function get(url, opts, onresponse) {
+  const req = exports.request(url, opts, onresponse)
+  req.end()
+  return req
+}
+
 // https://url.spec.whatwg.org/#default-port
 function defaultPort(url) {
   switch (url.protocol) {
