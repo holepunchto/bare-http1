@@ -30,7 +30,7 @@ exports.request = function request(url, opts, onresponse) {
   if (typeof url === 'string') url = new URL(url)
 
   if (isURL(url)) {
-    opts = opts ? { ...opts } : {}
+    opts = opts ? { ...opts, ...url } : { ...url }
 
     opts.host = url.hostname
     opts.path = url.pathname + url.search
