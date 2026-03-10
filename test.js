@@ -899,13 +899,14 @@ test.solo('socket destroyed after timeout', async function (t) {
   let socket
 
   const req = http
-    .request({ agent }, () => {
+    .request({ agent }, (res) => {
       socket = req.socket
+      res.resume()
     })
     .on('close', () => {
       setTimeout(() => {
         sub.is(socket.destroyed, true, 'socket destroyed after timeout')
-      }, 1000)
+      }, 2000)
     })
     .end()
 
