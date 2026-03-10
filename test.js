@@ -882,6 +882,38 @@ test('destroy timeouted free socket', async function (t) {
   server.close()
 })
 
+test.solo('socket destroyed after timeout', async function (t) {
+  const sub = t.test()
+  sub.plan(1)
+
+  const server = http
+    .createServer((req, res) => {
+      res.end()
+    })
+    .listen(0)
+
+  await waitForServer(server)
+
+  const agent = new http.Agent({ port: server.address().port, keepAlive: true, timeout: 500 })
+
+  let socket
+
+  const req = http
+    .request({ agent }, () => {
+      socket = req.socket
+    })
+    .on('close', () => {
+      setTimeout(() => {
+        sub.is(socket.destroyed, true, 'socket destroyed after timeout')
+      }, 1000)
+    })
+    .end()
+
+  await sub
+
+  server.close()
+})
+
 test('consecutive servers using the same port', async function (t) {
   t.plan(2)
 
