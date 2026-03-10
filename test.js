@@ -917,7 +917,7 @@ test('destroy free socket after keepAlive expires', async function (t) {
 
 test('do not destroy active socket on timeout', async function (t) {
   const sub = t.test()
-  sub.plan(2)
+  sub.plan(3)
 
   const server = http
     .createServer((req, res) => {
@@ -944,6 +944,10 @@ test('do not destroy active socket on timeout', async function (t) {
 
     agent.destroy()
   })
+
+  setTimeout(() => {
+    sub.is(req.socket.destroyed, true, 'free socket destroyed after keepAlive expired')
+  }, 2000)
 
   await sub
 
