@@ -882,7 +882,7 @@ test('destroy timeouted free socket', async function (t) {
   server.close()
 })
 
-test.solo('socket destroyed after timeout', async function (t) {
+test('destroy free socket after keepAlive expires', async function (t) {
   const sub = t.test()
   sub.plan(1)
 
@@ -894,7 +894,7 @@ test.solo('socket destroyed after timeout', async function (t) {
 
   await waitForServer(server)
 
-  const agent = new http.Agent({ port: server.address().port, keepAlive: true, timeout: 500 })
+  const agent = new http.Agent({ port: server.address().port, keepAlive: 500 })
 
   let socket
 
@@ -905,10 +905,45 @@ test.solo('socket destroyed after timeout', async function (t) {
     })
     .on('close', () => {
       setTimeout(() => {
-        sub.is(socket.destroyed, true, 'socket destroyed after timeout')
-      }, 2000)
+        sub.is(socket.destroyed, true, 'free socket destroyed after keepAlive expired')
+      }, 1000)
     })
     .end()
+
+  await sub
+
+  server.close()
+})
+
+test('do not destroy active socket on timeout', async function (t) {
+  const sub = t.test()
+  sub.plan(2)
+
+  const server = http
+    .createServer((req, res) => {
+      setTimeout(() => res.end('response'), 1000)
+    })
+    .listen(0)
+
+  await waitForServer(server)
+
+  const agent = new http.Agent({ port: server.address().port, keepAlive: 500, timeout: 500 })
+
+  const req = http
+    .request({ agent }, (res) => {
+      const chunks = []
+      res.on('data', (data) => chunks.push(data))
+      res.on('end', () => {
+        sub.alike(Buffer.concat(chunks), Buffer.from('response'), 'got response')
+      })
+    })
+    .end()
+
+  req.on('close', () => {
+    sub.is(req.socket.destroyed, false, 'socket not destroyed during active request')
+
+    agent.destroy()
+  })
 
   await sub
 
