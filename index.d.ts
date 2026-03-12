@@ -99,6 +99,9 @@ export interface HTTPAgentOptions {
 }
 
 export interface HTTPAgent {
+  readonly sockets: Iterable<TCPSocket>
+  readonly freeSockets: Iterable<TCPSocket>
+
   createConnection(opts?: TCPSocketOptions & TCPSocketConnectOptions): TCPSocket
 
   reuseSocket(socket: TCPSocket, req?: HTTPClientRequest): void
