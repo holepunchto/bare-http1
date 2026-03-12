@@ -99,8 +99,8 @@ export interface HTTPAgentOptions {
 }
 
 export interface HTTPAgent {
-  readonly sockets: Iterable<TCPSocket>
-  readonly freeSockets: Iterable<TCPSocket>
+  readonly sockets: Iterator<TCPSocket>
+  readonly freeSockets: Iterator<TCPSocket>
 
   createConnection(opts?: TCPSocketOptions & TCPSocketConnectOptions): TCPSocket
 
