@@ -846,6 +846,51 @@ test('socket reuse', async function (t) {
   server.close(() => t.pass('server closed'))
 })
 
+test.solo('socket reuse, destroy first response', async function (t) {
+  t.plan(2)
+
+  const sub = t.test()
+  sub.plan(3)
+
+  const server = http
+    .createServer((req, res) => {
+      res.end('response')
+    })
+    .listen(0)
+
+  await waitForServer(server)
+
+  const agent = new http.Agent({ port: server.address().port, keepAlive: true })
+
+  let socket
+
+  let req = http
+    .request({ agent }, (res) => {
+      socket = req.socket
+
+      res.on('close', () => sub.pass('response was closed')).destroy()
+    })
+    .on('close', () => {
+      setImmediate(() => {
+        req = http
+          .request({ agent }, (res) => {
+            sub.not(req.socket, socket, 'socket was not reused')
+
+            res.on('data', (data) => sub.alike(data, Buffer.from('response')))
+          })
+          .on('close', () => {
+            agent.destroy()
+          })
+          .end()
+      })
+    })
+    .end()
+
+  await sub
+
+  server.close(() => t.pass('server closed'))
+})
+
 test('destroy timeouted free socket', async function (t) {
   const sub = t.test()
   sub.plan(1)
