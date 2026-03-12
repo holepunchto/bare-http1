@@ -846,7 +846,7 @@ test('socket reuse', async function (t) {
   server.close(() => t.pass('server closed'))
 })
 
-test.solo('socket reuse, destroy first response', async function (t) {
+test('socket reuse, destroy first response', async function (t) {
   t.plan(2)
 
   const sub = t.test()
