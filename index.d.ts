@@ -118,7 +118,7 @@ export interface HTTPAgent {
 class HTTPAgent {
   constructor(opts?: HTTPAgentOptions & TCPSocketOptions & TCPSocketConnectOptions)
 
-  static global: HTTPAgent
+  static readonly global: HTTPAgent
 }
 
 export const globalAgent: HTTPAgent
