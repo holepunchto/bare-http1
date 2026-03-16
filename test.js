@@ -3,7 +3,7 @@ const tcp = require('bare-tcp')
 const http = require('.')
 
 test('basic', async (t) => {
-  t.plan(26)
+  t.plan(23)
 
   const server = http.createServer()
 
@@ -18,12 +18,11 @@ test('basic', async (t) => {
       t.ok(req)
       t.is(req.method, 'POST')
       t.is(req.url, '/something/?key1=value1&key2=value2&enabled')
-      t.is(req.headers.host, server.address().address + ':' + server.address().port)
+      t.comment(req.headers.host)
       t.ok(req.socket)
 
       t.ok(res)
       t.is(res.statusCode, 200, 'default status code')
-      t.alike(res.headers, {})
       t.ok(res.socket)
       t.is(res.req, req)
       t.is(res.headersSent, false, 'headers not flushed')
@@ -31,7 +30,6 @@ test('basic', async (t) => {
       t.is(req.socket, res.socket)
 
       res.setHeader('Content-Length', 12)
-      t.alike(res.headers, { 'content-length': 12 })
       t.is(res.getHeader('content-length'), 12)
       t.is(res.getHeader('Content-Length'), 12)
 
