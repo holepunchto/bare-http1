@@ -651,9 +651,9 @@ test('request timeout', async function (t) {
   const req = http.request({ port: server.address().port }).end()
 
   req
-    .on('error', () => t.pass('socket closed'))
-    .on('timeout', () => sub.pass('event'))
-    .setTimeout(100, () => sub.pass('callback'))
+    .on('close', () => t.pass('socket closed'))
+    .on('timeout', () => sub.pass('timeout'))
+    .setTimeout(100, () => sub.pass('callback invoked'))
 
   await sub
 
