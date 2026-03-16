@@ -35,9 +35,7 @@ test('basic', async (t) => {
 
       req
         .on('close', () => t.pass('server request closed'))
-        .on('data', (data) => {
-          t.alike(data, Buffer.from('body message'), 'request body')
-        })
+        .on('data', (data) => t.alike(data, Buffer.from('body message')))
 
       res
         .on('close', () => {
