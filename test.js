@@ -651,9 +651,9 @@ test('request timeout', async function (t) {
   const req = http.request({ port: server.address().port }).end()
 
   req
-    .on('error', () => t.pass('socket closed'))
-    .on('timeout', () => sub.pass('event'))
-    .setTimeout(100, () => sub.pass('callback'))
+    .on('close', () => t.pass('socket closed'))
+    .on('timeout', () => sub.pass('timeout'))
+    .setTimeout(100, () => sub.pass('callback invoked'))
 
   await sub
 
@@ -883,6 +883,35 @@ test('socket reuse, destroy first response', async function (t) {
           })
           .end()
       })
+    })
+    .end()
+
+  await sub
+
+  server.close(() => t.pass('server closed'))
+})
+
+test('socket reuse, socket closes after timeout', async function (t) {
+  t.plan(2)
+
+  const sub = t.test()
+  sub.plan(2)
+
+  const server = http
+    .createServer((req, res) => {
+      res.end('response')
+    })
+    .listen(0)
+
+  await waitForServer(server)
+
+  const agent = new http.Agent({ port: server.address().port, keepAlive: true, timeout: 500 })
+
+  let req = http
+    .request({ agent }, (res) => {
+      res.on('close', () => sub.pass('response closed')).resume()
+
+      req.socket.on('close', () => sub.pass('socket closed'))
     })
     .end()
 
