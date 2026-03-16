@@ -2,68 +2,55 @@ const test = require('brittle')
 const tcp = require('bare-tcp')
 const http = require('.')
 
-test('basic', async function (t) {
-  t.plan(26)
+test('basic', async (t) => {
+  t.plan(23)
 
   const server = http.createServer()
 
-  server.on('listening', function () {
-    t.pass('server listening')
-  })
+  server
+    .on('listening', () => t.pass('server listening'))
+    .on('connection', (socket) => {
+      t.ok(socket)
 
-  server.on('connection', function (socket) {
-    t.ok(socket)
-
-    socket.on('close', () => {
-      t.pass('server socket closed')
+      socket.on('close', () => t.pass('server socket closed'))
     })
+    .on('request', (req, res) => {
+      t.ok(req)
+      t.is(req.method, 'POST')
+      t.is(req.url, '/something/?key1=value1&key2=value2&enabled')
+      t.comment(req.headers.host)
+      t.ok(req.socket)
 
-    socket.on('error', (err) =>
-      t.fail('server socket error: ' + err.message + ' (' + err.code + ')')
-    )
-  })
+      t.ok(res)
+      t.is(res.statusCode, 200, 'default status code')
+      t.ok(res.socket)
+      t.is(res.req, req)
+      t.is(res.headersSent, false, 'headers not flushed')
 
-  server.on('request', function (req, res) {
-    t.ok(req)
-    t.is(req.method, 'POST')
-    t.is(req.url, '/something/?key1=value1&key2=value2&enabled')
-    t.is(req.headers.host, server.address().address + ':' + server.address().port)
-    t.ok(req.socket)
+      t.is(req.socket, res.socket)
 
-    t.ok(res)
-    t.is(res.statusCode, 200, 'default status code')
-    t.alike(res.headers, {})
-    t.ok(res.socket)
-    t.is(res.req, req)
-    t.is(res.headersSent, false, 'headers not flushed')
+      res.setHeader('Content-Length', 12)
+      t.is(res.getHeader('content-length'), 12)
+      t.is(res.getHeader('Content-Length'), 12)
 
-    t.is(req.socket, res.socket)
+      req
+        .on('close', () => t.pass('server request closed'))
+        .on('data', (data) => {
+          t.alike(data, Buffer.from('body message'), 'request body')
+        })
 
-    res.setHeader('Content-Length', 12)
-    t.alike(res.headers, { 'content-length': 12 })
-    t.is(res.getHeader('content-length'), 12)
-    t.is(res.getHeader('Content-Length'), 12)
-
-    res.end('Hello world!')
-
-    req.on('close', function () {
-      t.pass('server request closed')
+      res
+        .on('close', () => {
+          t.pass('server response closed')
+          t.is(res.headersSent, true, 'headers flushed')
+        })
+        .end('Hello world!')
     })
+    .listen(0)
 
-    req.on('data', function (data) {
-      t.alike(data, Buffer.from('body message'), 'request body')
-    })
-
-    res.on('close', function () {
-      t.is(res.headersSent, true, 'headers flushed')
-      t.pass('server response closed')
-    })
-  })
-
-  server.listen(0)
   await waitForServer(server)
 
-  const reply = await request(
+  const req = await request(
     {
       method: 'POST',
       host: server.address().address,
@@ -77,220 +64,249 @@ test('basic', async function (t) {
     }
   )
 
-  t.absent(reply.error)
-  t.is(reply.response.statusCode, 200)
-
-  const body = Buffer.concat(reply.response.chunks)
-  t.alike(body, Buffer.from('Hello world!'), 'client response ended')
+  t.absent(req.error)
+  t.is(req.response.statusCode, 200)
+  t.alike(Buffer.concat(req.response.chunks), Buffer.from('Hello world!'))
 
   server.close(() => t.pass('server closed'))
 })
 
-test('port already in use', async function (t) {
+test('port already in use', async (t) => {
   t.plan(2)
 
-  const server = http.createServer()
-  server.listen(0)
+  const server = http.createServer().listen(0)
+
   await waitForServer(server)
 
-  const server2 = http.createServer()
-  server2.listen(server.address().port)
-  server2.on('error', (err) => {
-    t.is(err.code, 'EADDRINUSE')
+  http
+    .createServer()
+    .listen(server.address().port)
+    .on('error', (err) => {
+      t.is(err.code, 'EADDRINUSE')
 
-    server.close()
-    server.on('close', () => t.pass('original server closed'))
-  })
+      server.close(() => t.pass('server closed'))
+    })
 })
 
-test('destroy request', async function (t) {
-  t.plan(5)
+test('destroy request', async (t) => {
+  t.plan(4)
 
-  const server = http.createServer()
-  server.on('close', () => t.pass('server closed'))
+  const server = http
+    .createServer((req, res) => {
+      req.on('close', () => t.pass('server request closed')).destroy()
+    })
+    .listen(0)
 
-  server.on('connection', function (socket) {
-    socket.on('close', () => t.pass('server socket closed'))
-    socket.on('error', (err) =>
-      t.fail('server socket error: ' + err.message + ' (' + err.code + ')')
-    )
-  })
-
-  server.on('request', function (req, res) {
-    req.destroy()
-
-    req.on('close', () => t.pass('server request closed'))
-  })
-
-  server.listen(0)
   await waitForServer(server)
 
-  const reply = await request({
+  const req = await request({
     method: 'GET',
     host: server.address().address,
     port: server.address().port,
     path: '/'
   })
 
-  t.absent(reply.response, 'client should not receive a response')
+  t.absent(req.response, 'client should not receive a response')
+  t.ok(req.error, 'client errored')
 
-  t.ok(reply.error, 'client errored')
-
-  server.close()
+  server.close(() => t.pass('server closed'))
 })
 
-test('destroy response', async function (t) {
-  t.plan(6)
+test('destroy response', async (t) => {
+  t.plan(5)
 
-  const server = http.createServer()
-  server.on('close', () => t.pass('server closed'))
+  const server = http
+    .createServer((req, res) => {
+      res.destroy()
 
-  server.on('connection', function (socket) {
-    socket.on('close', () => t.pass('server socket closed'))
-    socket.on('error', (err) =>
-      t.fail('server socket error: ' + err.message + ' (' + err.code + ')')
-    )
-  })
+      req.on('close', () => t.pass('server request closed'))
+      res.on('close', () => t.pass('server response closed'))
+    })
+    .listen(0)
 
-  server.on('request', function (req, res) {
-    res.destroy()
-
-    req.on('close', () => t.pass('server request closed'))
-    res.on('close', () => t.pass('server response closed'))
-  })
-
-  server.listen(0)
   await waitForServer(server)
 
-  const reply = await request({
+  const req = await request({
     method: 'POST',
     host: server.address().address,
     port: server.address().port,
     path: '/'
   })
 
-  t.absent(reply.response, 'client should not receive a response')
-  t.ok(reply.error, 'client errored')
+  t.absent(req.response, 'client should not receive a response')
+  t.ok(req.error, 'client errored')
 
-  server.close()
+  server.close(() => t.pass('server closed'))
 })
 
-test('write head', async function (t) {
-  t.plan(8)
+test('destroy server socket', async (t) => {
+  t.plan(4)
 
-  const server = http.createServer()
-  server.on('close', () => t.pass('server closed'))
+  const server = http
+    .createServer((req, res) => {
+      t.fail('server should not receive request')
+    })
+    .on('connection', (socket) => {
+      socket.on('close', () => t.pass('server socket closed')).destroy()
+    })
+    .listen(0)
 
-  server.on('connection', function (socket) {
-    socket.on('close', () => t.pass('server socket closed'))
-    socket.on('error', (err) =>
-      t.fail('server socket error: ' + err.message + ' (' + err.code + ')')
-    )
-  })
-
-  server.on('request', function (req, res) {
-    req.resume()
-    res.writeHead(404)
-    res.end()
-
-    req.on('close', () => t.pass('server request closed'))
-    res.on('close', () => t.pass('server response closed'))
-  })
-
-  server.listen(0)
   await waitForServer(server)
 
-  const reply = await request({
+  const req = await request({
     method: 'GET',
     host: server.address().address,
     port: server.address().port,
     path: '/'
   })
 
-  t.absent(reply.error)
-  t.is(reply.response.statusCode, 404)
+  t.absent(req.response)
+  t.ok(req.error, 'had error')
 
-  t.alike(reply.response.chunks, [])
-  t.ok(reply.response.ended)
+  server.close(() => t.pass('server closed'))
+})
+
+test('destroy partial GET request', async (t) => {
+  const sub = t.test('')
+  sub.plan(2)
+
+  const server = http
+    .createServer((req, res) => {
+      req.on('close', () => sub.pass('request closed')).resume()
+      res.on('close', () => sub.pass('response closed'))
+    })
+    .listen(0)
+
+  await waitForServer(server)
+
+  const client = tcp.createConnection(server.address().port)
+
+  client.write('GET / HTTP/1.1\r\nHost: localhost\r\n\r\n')
+
+  setTimeout(() => client.destroy(), 100)
+
+  await sub
 
   server.close()
 })
 
-test('write head with headers', async function (t) {
-  t.plan(9)
+test('destroy partial POST request', async (t) => {
+  const sub = t.test('')
+  sub.plan(2)
 
-  const server = http.createServer()
-  server.on('close', () => t.pass('server closed'))
+  const server = http
+    .createServer((req, res) => {
+      req.on('close', () => sub.pass('request closed')).resume()
+      res.on('close', () => sub.pass('response closed'))
+    })
+    .listen(0)
 
-  server.on('connection', function (socket) {
-    socket.on('close', () => t.pass('server socket closed'))
-    socket.on('error', (err) =>
-      t.fail('server socket error: ' + err.message + ' (' + err.code + ')')
-    )
-  })
-
-  server.on('request', function (req, res) {
-    req.resume()
-    res.writeHead(404, { 'x-custom': 1234 })
-    res.end()
-
-    req.on('close', () => t.pass('server request closed'))
-    res.on('close', () => t.pass('server response closed'))
-  })
-
-  server.listen(0)
   await waitForServer(server)
 
-  const reply = await request({
+  const client = tcp.createConnection(server.address().port)
+
+  client.write('POST / HTTP/1.1\r\nHost: localhost\r\nContent-Length: 10000000\r\n\r\n')
+
+  setTimeout(() => client.destroy(), 100)
+
+  await sub
+
+  server.close()
+})
+
+test('write head', async (t) => {
+  t.plan(7)
+
+  const server = http
+    .createServer((req, res) => {
+      req.resume()
+      res.writeHead(404)
+      res.end()
+
+      req.on('close', () => t.pass('server request closed'))
+      res.on('close', () => t.pass('server response closed'))
+    })
+    .listen(0)
+
+  await waitForServer(server)
+
+  const req = await request({
     method: 'GET',
     host: server.address().address,
     port: server.address().port,
     path: '/'
   })
 
-  t.absent(reply.error)
-  t.is(reply.response.statusCode, 404)
-  t.alike(reply.response.chunks, [], 'client should not receive data')
-  t.ok(reply.response.ended, 'client response ended')
-  t.is(reply.response.headers['x-custom'], '1234')
+  t.absent(req.error)
+  t.is(req.response.statusCode, 404)
+  t.alike(req.response.chunks, [])
+  t.ok(req.response.ended)
 
-  server.close()
+  server.close(() => t.pass('server closed'))
 })
 
-test('chunked', async function (t) {
+test('write head with headers', async (t) => {
   t.plan(8)
 
-  const server = http.createServer()
-  server.on('close', () => t.pass('server closed'))
+  const server = http
+    .createServer((req, res) => {
+      req.resume()
+      res.writeHead(404, { 'x-custom': 1234 })
+      res.end()
 
-  server.on('connection', function (socket) {
-    socket.on('close', () => t.pass('server socket closed'))
-    socket.on('error', (err) =>
-      t.fail('server socket error: ' + err.message + ' (' + err.code + ')')
-    )
-  })
-
-  server.on('request', function (req, res) {
-    const chunks = []
-    req.on('data', (chunk) => chunks.push(chunk))
-    req.on('end', () => {
-      const body = Buffer.concat(chunks.map((c) => Buffer.from(c, 'hex')))
-      t.alike(body, Buffer.from('request body part 1 + request body part 2'), 'request body ended')
+      req.on('close', () => t.pass('server request closed'))
+      res.on('close', () => t.pass('server response closed'))
     })
+    .listen(0)
 
-    res.write('response part 1 + ')
-    setImmediate(() => {
-      res.end('response part 2')
-    })
-
-    req.on('close', () => t.pass('server request closed'))
-    res.on('close', () => t.pass('server response closed'))
-  })
-
-  server.listen(0)
   await waitForServer(server)
 
-  const reply = await request(
+  const req = await request({
+    method: 'GET',
+    host: server.address().address,
+    port: server.address().port,
+    path: '/'
+  })
+
+  t.absent(req.error)
+  t.is(req.response.statusCode, 404)
+  t.alike(req.response.chunks, [], 'client should not receive data')
+  t.ok(req.response.ended, 'client response ended')
+  t.is(req.response.headers['x-custom'], '1234')
+
+  server.close(() => t.pass('server closed'))
+})
+
+test('chunked', async (t) => {
+  t.plan(7)
+
+  const server = http
+    .createServer((req, res) => {
+      const chunks = []
+
+      req
+        .on('data', (chunk) => chunks.push(chunk))
+        .on('end', () => {
+          t.alike(
+            Buffer.concat(chunks),
+            Buffer.from('request body part 1 + request body part 2'),
+            'request body ended'
+          )
+        })
+
+      res.write('response part 1 + ')
+      setImmediate(() => {
+        res.end('response part 2')
+      })
+
+      req.on('close', () => t.pass('server request closed'))
+      res.on('close', () => t.pass('server response closed'))
+    })
+    .listen(0)
+
+  await waitForServer(server)
+
+  const req = await request(
     {
       method: 'POST',
       host: server.address().address,
@@ -305,137 +321,45 @@ test('chunked', async function (t) {
     }
   )
 
-  t.absent(reply.error)
-  t.is(reply.response.statusCode, 200)
+  t.absent(req.error)
+  t.is(req.response.statusCode, 200)
+  t.alike(Buffer.concat(req.response.chunks), Buffer.from('response part 1 + response part 2'))
 
-  const body = Buffer.concat(reply.response.chunks)
-
-  t.alike(body, Buffer.from('response part 1 + response part 2'), 'client response ended')
-
-  server.close()
+  server.close(() => t.pass('server closed'))
 })
 
-test('destroy socket', async function (t) {
-  t.plan(4)
-
-  const server = http.createServer()
-  server.on('close', () => t.pass('server closed'))
-
-  server.on('connection', function (socket) {
-    socket.destroy()
-
-    socket.on('close', () => t.pass('server socket closed'))
-    socket.on('error', (err) => {
-      t.fail('server socket error: ' + err.message + ' (' + err.code + ')')
-    })
-  })
-
-  server.on('request', function (req, res) {
-    t.fail('server should not receive request')
-  })
-
-  server.listen(0)
-  await waitForServer(server)
-
-  const reply = await request({
-    method: 'GET',
-    host: server.address().address,
-    port: server.address().port,
-    path: '/'
-  })
-
-  t.absent(reply.response)
-  t.ok(reply.error, 'had error')
-
-  server.close()
-})
-
-test('close server request/response at premature GET request closure', async function (t) {
-  const sub = t.test('')
-  sub.plan(2)
+test('large request and response body', async (t) => {
+  t.plan(7)
 
   const server = http
     .createServer((req, res) => {
-      req.resume()
-      req.on('close', () => sub.pass('request closed'))
-      res.on('close', () => sub.pass('response closed'))
+      const chunks = []
+
+      req
+        .on('data', (chunk) => chunks.push(chunk))
+        .on('end', () => {
+          t.alike(
+            Buffer.concat(chunks),
+            Buffer.concat([
+              Buffer.alloc(2 * 1024 * 1024, 'qwer'),
+              Buffer.alloc(2 * 1024 * 1024, 'asdf')
+            ])
+          )
+
+          res.write(Buffer.alloc(2 * 1024 * 1024, 'abcd'))
+          setImmediate(() => {
+            res.end(Buffer.alloc(2 * 1024 * 1024, 'efgh'))
+          })
+        })
+
+      req.on('close', () => t.pass('server request closed'))
+      res.on('close', () => t.pass('server response closed'))
     })
     .listen(0)
 
   await waitForServer(server)
 
-  const client = tcp.createConnection(server.address().port)
-  client.write('GET / HTTP/1.1\r\n\r\n')
-
-  setTimeout(() => client.destroy(), 300)
-
-  await sub
-
-  server.close()
-})
-
-test('close server request/response at premature POST request closure', async function (t) {
-  const sub = t.test('')
-  sub.plan(2)
-
-  const server = http
-    .createServer((req, res) => {
-      req.resume()
-      req.on('close', () => sub.pass('request closed'))
-      res.on('close', () => sub.pass('response closed'))
-    })
-    .listen(0)
-
-  await waitForServer(server)
-
-  const client = tcp.createConnection(server.address().port)
-  client.write('POST / HTTP/1.1\r\nContent-Length: 10000000\r\n\r\n')
-
-  setTimeout(() => client.destroy(), 300)
-
-  await sub
-
-  server.close()
-})
-
-test('server and client do big writes', async function (t) {
-  t.plan(8)
-
-  const server = http.createServer()
-  server.on('close', () => t.pass('server closed'))
-
-  server.on('connection', function (socket) {
-    socket.on('close', () => t.pass('server socket closed'))
-    socket.on('error', (err) => {
-      t.fail('server socket error: ' + err.message + ' (' + err.code + ')')
-    })
-  })
-
-  server.on('request', function (req, res) {
-    const chunks = []
-    req.on('data', (chunk) => chunks.push(chunk))
-    req.on('end', () => {
-      const body = Buffer.concat(chunks.map((c) => Buffer.from(c, 'hex')))
-      const expected = Buffer.concat([
-        Buffer.alloc(2 * 1024 * 1024, 'qwer'),
-        Buffer.alloc(2 * 1024 * 1024, 'asdf')
-      ])
-      t.alike(body, expected, 'request body ended')
-
-      res.write(Buffer.alloc(2 * 1024 * 1024, 'abcd'))
-      setImmediate(() => {
-        res.end(Buffer.alloc(2 * 1024 * 1024, 'efgh'))
-      })
-    })
-
-    req.on('close', () => t.pass('server request closed'))
-    res.on('close', () => t.pass('server response closed'))
-  })
-
-  server.listen(0)
-  await waitForServer(server)
-
-  const reply = await request(
+  const req = await request(
     {
       method: 'POST',
       host: server.address().address,
@@ -450,35 +374,34 @@ test('server and client do big writes', async function (t) {
     }
   )
 
-  t.is(reply.response.statusCode, 200)
-  t.ok(reply.response.ended)
+  t.is(req.response.statusCode, 200)
+  t.ok(req.response.ended)
+  t.alike(
+    Buffer.concat(req.response.chunks),
+    Buffer.concat([Buffer.alloc(2 * 1024 * 1024, 'abcd'), Buffer.alloc(2 * 1024 * 1024, 'efgh')])
+  )
 
-  const body = Buffer.concat(reply.response.chunks)
-  const expected = Buffer.concat([
-    Buffer.alloc(2 * 1024 * 1024, 'abcd'),
-    Buffer.alloc(2 * 1024 * 1024, 'efgh')
-  ])
-  t.alike(body, expected, 'client response ended')
-
-  server.close()
+  server.close(() => t.pass('server closed'))
 })
 
-test('basic protocol negotiation', async function (t) {
-  const up = t.test('upgrade event')
-  up.plan(4)
+test('protocol negotiation', async (t) => {
+  const up = t.test('upgrade')
+  up.plan(7)
 
   const server = http.createServer().listen(0)
   await waitForServer(server)
 
   server.on('upgrade', (req, socket, head) => {
-    up.alike(head, Buffer.from('request head'), 'server upgrade event')
+    up.alike(head, Buffer.from('request head'), 'server upgrade')
 
-    req.on('close', () => up.pass('request closed after server upgrade event'))
+    req
+      .on('end', () => up.pass('server request ended'))
+      .on('close', () => up.pass('server request closed'))
 
-    req.on('data', () => t.fail('request data event listener should be detached'))
-    req.on('drain', () => t.fail('request drain event listener should be detached'))
-    req.on('end', () => t.fail('request end event listener should be detached'))
-    req.on('error', () => t.fail('request error event listener should be detached'))
+    req
+      .on('data', () => t.fail())
+      .on('drain', () => t.fail())
+      .on('error', () => t.fail())
 
     const handshake =
       'HTTP/1.1 101 Web Socket Protocol Handshake\r\n' +
@@ -501,15 +424,18 @@ test('basic protocol negotiation', async function (t) {
     .end('request head')
 
   req.on('upgrade', (res, socket, head) => {
-    up.alike(head, Buffer.from('server head'), 'request upgrade event')
+    up.alike(head, Buffer.from('server head'), 'client upgrade')
 
-    req.on('close', () => up.pass('request closed after request upgrade event'))
+    req.on('close', () => up.pass('client request closed'))
 
-    res.on('close', () => t.fail('response close event listener should be detached'))
-    res.on('data', () => t.fail('response data event listener should be detached'))
-    res.on('drain', () => t.fail('response drain event listener should be detached'))
-    res.on('end', () => t.fail('response end event listener should be detached'))
-    res.on('error', () => t.fail('response error event listener should be detached'))
+    res
+      .on('close', () => up.pass('client response closed'))
+      .on('end', () => up.pass('client response ended'))
+
+    res
+      .on('data', () => t.fail())
+      .on('drain', () => t.fail())
+      .on('error', () => t.fail())
 
     socket.end()
   })
@@ -519,7 +445,7 @@ test('basic protocol negotiation', async function (t) {
   server.close()
 })
 
-test('close connection if missing upgrade handler', async function (t) {
+test('close connection if missing upgrade handler', async (t) => {
   const ce = t.test('close event')
   ce.plan(1)
 
@@ -553,96 +479,71 @@ test('close connection if missing upgrade handler', async function (t) {
   server.close()
 })
 
-test('make requests using url', async function (t) {
-  const rqts = t.test('requests')
-  t.plan(2)
-  rqts.plan(2)
+test('GET request', async (t) => {
+  t.plan(6)
 
-  const server = http.createServer().listen(0)
+  const sub = t.test('requests')
+  sub.plan(2)
+
+  const server = http
+    .createServer((req, res) => {
+      t.is(req.url, '/path')
+      t.is(req.method, 'GET')
+
+      res.end('response')
+    })
+    .listen(0)
+
   await waitForServer(server)
-  server.on('request', (req, res) => {
-    t.is(req.url, '/path')
-    res.end('response')
-  })
 
   const url = `http://localhost:${server.address().port}/path`
-  const expectedBuf = Buffer.from('response')
-
-  http
-    .request(url, (res) => {
-      res.on('data', (data) => rqts.alike(data, expectedBuf, 'url as string'))
-    })
-    .end()
-
-  http
-    .request(new URL(url), (res) => {
-      res.on('data', (data) => rqts.alike(data, expectedBuf, 'url instance'))
-    })
-    .end()
-
-  await rqts
-
-  server.close()
-})
-
-test('get request', async function (t) {
-  const rqts = t.test('get requests')
-  t.plan(4)
-  rqts.plan(2)
-
-  const server = http.createServer().listen(0)
-  await waitForServer(server)
-  server.on('request', (req, res) => {
-    t.is(req.url, '/path', 'got path')
-    t.is(req.method, 'GET', 'GET')
-    res.end('response')
-  })
-
-  const url = `http://localhost:${server.address().port}/path`
-  const expectedBuf = Buffer.from('response')
 
   http.get(url, (res) => {
-    res.on('data', (data) => rqts.alike(data, expectedBuf, 'url as string'))
+    res.on('data', (data) => sub.alike(data, Buffer.from('response')))
   })
 
   http.get(new URL(url), (res) => {
-    res.on('data', (data) => rqts.alike(data, expectedBuf, 'url instance'))
+    res.on('data', (data) => sub.alike(data, Buffer.from('response')))
   })
 
-  await rqts
+  await sub
 
-  server.close()
+  server.close(() => t.pass('server closed'))
 })
 
-test('custom request headers', async function (t) {
-  const ht = t.test('headers')
-  ht.plan(1)
+test('custom request headers', async (t) => {
+  t.plan(2)
 
-  const server = http.createServer().listen(0)
+  const sub = t.test('headers')
+  sub.plan(1)
+
+  const server = http
+    .createServer((req, res) => {
+      res.end()
+      sub.is(req.headers['custom-header'], 'value')
+    })
+    .listen(0)
+
   await waitForServer(server)
 
-  server.on('request', (req, res) => {
-    res.end()
-    ht.is(req.headers['custom-header'], 'value')
-  })
+  http.request({ port: server.address().port, headers: { 'custom-header': 'value' } }).end()
 
-  const { port } = server.address()
-  http.request({ port, headers: { 'custom-header': 'value' } }).end()
+  await sub
 
-  await ht
-
-  server.close()
+  server.close(() => t.pass('server closed'))
 })
 
-test('request timeout', async function (t) {
-  t.plan(3)
+test('client request timeout', async (t) => {
+  t.plan(2)
 
   const sub = t.test()
   sub.plan(2)
 
   const server = http
-    .createServer((req, res) => {
-      sub.then(() => res.end())
+    .createServer(async (req, res) => {
+      await sub
+
+      res.end()
     })
     .listen(0)
 
@@ -650,99 +551,88 @@ test('request timeout', async function (t) {
 
   const req = http.request({ port: server.address().port }).end()
 
-  req
-    .on('close', () => t.pass('socket closed'))
-    .on('timeout', () => sub.pass('timeout'))
-    .setTimeout(100, () => sub.pass('callback invoked'))
+  req.on('timeout', () => sub.pass('timeout')).setTimeout(100, () => sub.pass('callback invoked'))
 
   await sub
 
   server.close(() => t.pass('server closed'))
 })
 
-test('server timeout', async function (t) {
-  t.plan(3)
+test('server timeout', async (t) => {
+  t.plan(2)
 
   const sub = t.test()
   sub.plan(3)
 
-  const server = http
-    .createServer((req, res) => {
-      res.end()
-    })
-    .listen(0)
+  const server = http.createServer((req, res) => res.end()).listen(0)
 
-  server.setTimeout(100, (socket) => {
-    sub.is(typeof socket, 'object', 'callback receive socket as argument')
-  })
+  server
+    .on('timeout', () => sub.pass('timeout'))
+    .setTimeout(100, () => sub.pass('callback invoked'))
 
-  server.on('timeout', (socket) => {
-    sub.is(typeof socket, 'object', 'event receive socket as argument')
-  })
-
-  sub.is(server.timeout, 100, 'timeout getter')
+  sub.is(server.timeout, 100)
 
   await waitForServer(server)
 
-  const { port } = server.address()
-  const req = http.request({ port })
-
-  req.on('error', () => t.pass('request timeout'))
+  const req = http.request({ port: server.address().port })
 
   await sub
 
-  req.end()
-  server.close(() => t.pass('server closed'))
+  req.on('close', () => server.close(() => t.pass('server closed'))).end()
 })
 
-test('close the server at timeout if do not have any handler', async function (t) {
-  t.plan(1)
+test('server timeout, no handler', async (t) => {
+  t.plan(2)
+
   const server = http.createServer().listen(0).setTimeout(100)
 
   await waitForServer(server)
 
-  const client = http.request({ port: server.address().port })
+  const req = http.request({ port: server.address().port })
 
-  client.on('error', () => {
-    t.pass()
+  req.on('error', (err) => {
+    t.pass(err.message)
 
-    server.close()
+    server.close(() => t.pass('server closed'))
   })
 })
 
-test('do not close the server at timeout if a handler is found', async function (t) {
+test('server timeout, handler', async (t) => {
   t.plan(2)
 
-  const server = http.createServer((req, res) => {
-    res.on('timeout', () => {
-      t.pass('response timeout')
+  const server = http
+    .createServer((req, res) => {
+      res.on('timeout', () => {
+        t.pass('response timeout')
 
-      res.end()
-      server.close()
+        res.end()
+      })
     })
-  })
-
-  server.listen(0).setTimeout(100)
+    .listen(0)
+    .setTimeout(100)
 
   await waitForServer(server)
 
   const req = http.request({ port: server.address().port }).end()
 
-  req.on('error', () => t.pass('socket closed'))
+  req.on('close', () => server.close(() => t.pass('server closed'))).end()
 })
 
-test('server response timeout', async function (t) {
-  t.plan(3)
+test('server response timeout', async (t) => {
+  t.plan(2)
 
   const sub = t.test()
   sub.plan(2)
 
   const server = http
-    .createServer((req, res) => {
-      res.setTimeout(100, () => sub.pass('timeout callback'))
-      res.on('timeout', () => sub.pass('timeout event'))
+    .createServer(async (req, res) => {
+      res
+        .on('timeout', () => sub.pass('timeout'))
+        .setTimeout(100, () => sub.pass('callback invoked'))
 
-      sub.then(() => res.end())
+      await sub
+
+      res.end()
     })
     .listen(0)
 
@@ -750,32 +640,30 @@ test('server response timeout', async function (t) {
 
   const req = http.request({ port: server.address().port }).end()
 
-  req.on('error', () => t.pass('socket closed'))
-
   await sub
 
-  server.close(() => t.pass('server closed'))
+  req.on('close', () => server.close(() => t.pass('server closed'))).end()
 })
 
-test('cancel timeouts when has upgrade event handled', async function (t) {
-  const server = http.createServer().listen(0)
+test('cancel timeouts when has upgrade event handled', async (t) => {
+  const server = http
+    .createServer()
+    .on('upgrade', (req, socket, head) => {
+      const handshake =
+        'HTTP/1.1 101 Web Socket Protocol Handshake\r\n' +
+        'Upgrade: weird-protocol\r\n' +
+        'Connection: Upgrade\r\n' +
+        '\r\n'
 
-  server.setTimeout(100, () => t.fail('timeout callback'))
-  server.on('timeout', () => t.fail('timeout event'))
-
-  server.on('upgrade', (req, socket, head) => {
-    const handshake =
-      'HTTP/1.1 101 Web Socket Protocol Handshake\r\n' +
-      'Upgrade: weird-protocol\r\n' +
-      'Connection: Upgrade\r\n' +
-      '\r\n'
-
-    socket.end(handshake)
-  })
+      socket.end(handshake)
+    })
+    .on('timeout', () => t.fail('server timeout'))
+    .setTimeout(100, () => t.fail('server callback invoked'))
+    .listen(0)
 
   await waitForServer(server)
 
-  const client = http
+  const req = http
     .request({
       port: server.address().port,
       headers: {
@@ -783,13 +671,14 @@ test('cancel timeouts when has upgrade event handled', async function (t) {
         Upgrade: 'weird-protocol'
       }
     })
+
+    .on('timeout', () => t.fail('client timeout'))
+    .setTimeout(100, () => t.fail('client callback invoked'))
     .end()
 
-  client.setTimeout(100, () => t.fail('client callback'))
-  client.on('timeout', () => t.fail('client event'))
-
   let upgradedSocket
-  client.on('upgrade', (res, socket) => {
+
+  req.on('upgrade', (res, socket) => {
     upgradedSocket = socket
   })
 
@@ -801,17 +690,13 @@ test('cancel timeouts when has upgrade event handled', async function (t) {
   }, 400)
 })
 
-test('socket reuse', async function (t) {
+test('socket reuse', async (t) => {
   t.plan(2)
 
   const sub = t.test()
   sub.plan(3)
 
-  const server = http
-    .createServer((req, res) => {
-      res.end('response')
-    })
-    .listen(0)
+  const server = http.createServer((req, res) => res.end('response')).listen(0)
 
   await waitForServer(server)
 
@@ -829,7 +714,7 @@ test('socket reuse', async function (t) {
       setImmediate(() => {
         req = http
           .request({ agent }, (res) => {
-            sub.is(req.socket, socket, 'socket was reused')
+            sub.is(req.socket, socket, 'socket reused')
 
             res.on('data', (data) => sub.alike(data, Buffer.from('response')))
           })
@@ -846,17 +731,13 @@ test('socket reuse', async function (t) {
   server.close(() => t.pass('server closed'))
 })
 
-test('socket reuse, destroy first response', async function (t) {
+test('socket reuse, destroy first response', async (t) => {
   t.plan(2)
 
   const sub = t.test()
   sub.plan(3)
 
-  const server = http
-    .createServer((req, res) => {
-      res.end('response')
-    })
-    .listen(0)
+  const server = http.createServer((req, res) => res.end('response')).listen(0)
 
   await waitForServer(server)
 
@@ -868,13 +749,13 @@ test('socket reuse, destroy first response', async function (t) {
     .request({ agent }, (res) => {
       socket = req.socket
 
-      res.on('close', () => sub.pass('response was closed')).destroy()
+      res.on('close', () => sub.pass('response closed')).destroy()
     })
     .on('close', () => {
       setImmediate(() => {
         req = http
           .request({ agent }, (res) => {
-            sub.not(req.socket, socket, 'socket was not reused')
+            sub.not(req.socket, socket, 'socket not reused')
 
             res.on('data', (data) => sub.alike(data, Buffer.from('response')))
           })
@@ -891,17 +772,13 @@ test('socket reuse, destroy first response', async function (t) {
   server.close(() => t.pass('server closed'))
 })
 
-test('socket reuse, socket closes after timeout', async function (t) {
+test('socket reuse, socket closes after timeout', async (t) => {
   t.plan(2)
 
   const sub = t.test()
   sub.plan(2)
 
-  const server = http
-    .createServer((req, res) => {
-      res.end('response')
-    })
-    .listen(0)
+  const server = http.createServer((req, res) => res.end('response')).listen(0)
 
   await waitForServer(server)
 
@@ -920,73 +797,38 @@ test('socket reuse, socket closes after timeout', async function (t) {
   server.close(() => t.pass('server closed'))
 })
 
-test('destroy timeouted free socket', async function (t) {
-  const sub = t.test()
-  sub.plan(1)
-
-  const server = http
-    .createServer((req, res) => {
-      res.end()
-    })
-    .listen(0)
-
-  await waitForServer(server)
-
-  const agent = new http.Agent({ port: server.address().port, keepAlive: true, timeout: 500 })
-
-  let socket
-
-  let req = http
-    .request({ agent }, (res) => {
-      socket = req.socket
-    })
-    .on('close', () => {
-      setTimeout(() => {
-        req = http
-          .request({ agent }, (res) => {
-            sub.not(req.socket, socket, 'socket was not reused')
-          })
-          .end()
-      }, 1000)
-    })
-    .end()
-
-  await sub
-
-  server.close()
-})
-
-test('consecutive servers using the same port', async function (t) {
+test('reuse port after closing server', async (t) => {
   t.plan(2)
 
   let server
-  let close
+  let sub
 
   server = http.createServer((req, res) => res.end()).listen(0)
+
   await waitForServer(server)
 
   const { port } = server.address()
 
   await request({ port })
 
-  close = t.test('first server close')
-  close.plan(1)
+  sub = t.test('first server close')
+  sub.plan(1)
 
-  server.close(() => close.pass())
+  server.close(() => sub.pass())
 
-  await close
+  await sub
 
   server = http.createServer((req, res) => res.end()).listen(port)
   await waitForServer(server)
 
   await request({ port })
 
-  close = t.test('second server close')
-  close.plan(1)
+  sub = t.test('second server close')
+  sub.plan(1)
 
-  server.close(() => close.pass())
+  server.close(() => sub.pass())
 
-  await close
+  await sub
 })
 
 function waitForServer(server) {
@@ -1008,11 +850,11 @@ function request(opts, cb) {
 
     const result = { statusCode: 0, error: null, response: null }
 
-    client.on('error', function (err) {
+    client.on('error', (err) => {
       result.error = err.message
     })
 
-    client.on('response', function (res) {
+    client.on('response', (res) => {
       const r = (result.response = {
         statusCode: res.statusCode,
         headers: res.headers,
