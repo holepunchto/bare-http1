@@ -1,6 +1,9 @@
 const test = require('brittle')
-const tcp = require('bare-tcp')
-const http = require('.')
+// const tcp = require('bare-tcp')
+// const http = require('.')
+
+const tcp = require(global.Bare ? 'bare-tcp' : 'net')
+const http = require(global.Bare ? '.' : 'http')
 
 test('basic', async (t) => {
   t.plan(23)
@@ -385,21 +388,23 @@ test('large request and response body', async (t) => {
 })
 
 test('protocol negotiation', async (t) => {
-  const up = t.test('upgrade event')
-  up.plan(4)
+  const up = t.test('upgrade')
+  up.plan(7)
 
   const server = http.createServer().listen(0)
   await waitForServer(server)
 
   server.on('upgrade', (req, socket, head) => {
-    up.alike(head, Buffer.from('request head'), 'server upgrade event')
+    up.alike(head, Buffer.from('request head'), 'server upgrade')
 
-    req.on('close', () => up.pass('request closed after server upgrade event'))
+    req
+      .on('end', () => up.pass('server request ended'))
+      .on('close', () => up.pass('server request closed'))
 
-    req.on('data', () => t.fail('request data event listener should be detached'))
-    req.on('drain', () => t.fail('request drain event listener should be detached'))
-    req.on('end', () => t.fail('request end event listener should be detached'))
-    req.on('error', () => t.fail('request error event listener should be detached'))
+    req
+      .on('data', () => t.fail())
+      .on('drain', () => t.fail())
+      .on('error', () => t.fail())
 
     const handshake =
       'HTTP/1.1 101 Web Socket Protocol Handshake\r\n' +
@@ -422,15 +427,18 @@ test('protocol negotiation', async (t) => {
     .end('request head')
 
   req.on('upgrade', (res, socket, head) => {
-    up.alike(head, Buffer.from('server head'), 'request upgrade event')
+    up.alike(head, Buffer.from('server head'), 'client upgrade')
 
-    req.on('close', () => up.pass('request closed after request upgrade event'))
+    req.on('close', () => up.pass('client request closed'))
 
-    res.on('close', () => t.fail('response close event listener should be detached'))
-    res.on('data', () => t.fail('response data event listener should be detached'))
-    res.on('drain', () => t.fail('response drain event listener should be detached'))
-    res.on('end', () => t.fail('response end event listener should be detached'))
-    res.on('error', () => t.fail('response error event listener should be detached'))
+    res
+      .on('close', () => up.pass('client response closed'))
+      .on('end', () => up.pass('client response ended'))
+
+    res
+      .on('data', () => t.fail())
+      .on('drain', () => t.fail())
+      .on('error', () => t.fail())
 
     socket.end()
   })
