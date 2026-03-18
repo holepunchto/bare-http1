@@ -190,7 +190,7 @@ test('destroy client socket', async (t) => {
 })
 
 test('destroy partial GET request', async (t) => {
-  const sub = t.test('')
+  const sub = t.test()
   sub.plan(2)
 
   const server = http
@@ -214,7 +214,7 @@ test('destroy partial GET request', async (t) => {
 })
 
 test('destroy partial POST request', async (t) => {
-  const sub = t.test('')
+  const sub = t.test()
   sub.plan(2)
 
   const server = http
@@ -408,18 +408,18 @@ test('large request and response body', async (t) => {
 })
 
 test('protocol negotiation', async (t) => {
-  const up = t.test('upgrade')
-  up.plan(7)
+  const sub = t.test()
+  sub.plan(7)
 
   const server = http.createServer().listen(0)
   await waitForServer(server)
 
   server.on('upgrade', (req, socket, head) => {
-    up.alike(head, Buffer.from('request head'), 'server upgrade')
+    sub.alike(head, Buffer.from('request head'), 'server upgrade')
 
     req
-      .on('end', () => up.pass('server request ended'))
-      .on('close', () => up.pass('server request closed'))
+      .on('end', () => sub.pass('server request ended'))
+      .on('close', () => sub.pass('server request closed'))
 
     req
       .on('data', () => t.fail())
@@ -447,13 +447,13 @@ test('protocol negotiation', async (t) => {
     .end('request head')
 
   req.on('upgrade', (res, socket, head) => {
-    up.alike(head, Buffer.from('server head'), 'client upgrade')
+    sub.alike(head, Buffer.from('server head'), 'client upgrade')
 
-    req.on('close', () => up.pass('client request closed'))
+    req.on('close', () => sub.pass('client request closed'))
 
     res
-      .on('close', () => up.pass('client response closed'))
-      .on('end', () => up.pass('client response ended'))
+      .on('close', () => sub.pass('client response closed'))
+      .on('end', () => sub.pass('client response ended'))
 
     res
       .on('data', () => t.fail())
@@ -463,14 +463,14 @@ test('protocol negotiation', async (t) => {
     socket.end()
   })
 
-  await up
+  await sub
 
   server.close()
 })
 
 test('close connection if missing upgrade handler', async (t) => {
-  const ce = t.test('close event')
-  ce.plan(1)
+  const sub = t.test()
+  sub.plan(1)
 
   const server = http.createServer().listen(0)
   await waitForServer(server)
@@ -495,9 +495,9 @@ test('close connection if missing upgrade handler', async (t) => {
     })
     .end()
 
-  req.on('close', () => ce.pass('connection closed'))
+  req.on('close', () => sub.pass('connection closed'))
 
-  await ce
+  await sub
 
   server.close()
 })
@@ -505,7 +505,7 @@ test('close connection if missing upgrade handler', async (t) => {
 test('GET request', async (t) => {
   t.plan(6)
 
-  const sub = t.test('requests')
+  const sub = t.test()
   sub.plan(2)
 
   const server = http
@@ -537,7 +537,7 @@ test('GET request', async (t) => {
 test('custom request headers', async (t) => {
   t.plan(2)
 
-  const sub = t.test('headers')
+  const sub = t.test()
   sub.plan(1)
 
   const server = http
