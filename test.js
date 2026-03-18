@@ -164,6 +164,31 @@ test('destroy server socket', async (t) => {
   server.close(() => t.pass('server closed'))
 })
 
+test('destroy client socket', async (t) => {
+  t.plan(2)
+
+  const sub = t.test()
+  sub.plan(1)
+
+  const server = http
+    .createServer((req, res) => {
+      t.fail('server should not receive request')
+    })
+    .listen(0)
+
+  await waitForServer(server)
+
+  const req = http.request({ port: server.address().port })
+
+  req.on('close', () => sub.pass('client socket closed'))
+
+  req.socket.destroy()
+
+  await sub
+
+  server.close(() => t.pass('server closed'))
+})
+
 test('destroy partial GET request', async (t) => {
   const sub = t.test('')
   sub.plan(2)
@@ -712,7 +737,7 @@ test('socket reuse', async (t) => {
       setImmediate(() => {
         req = http
           .request({ agent }, (res) => {
-            sub.is(req.socket, socket, 'socket reused')
+            sub.ok(req.socket === socket, 'socket reused')
 
             res.on('data', (data) => sub.alike(data, Buffer.from('response')))
           })
