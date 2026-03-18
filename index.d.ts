@@ -99,6 +99,8 @@ export interface HTTPAgentOptions {
 }
 
 export interface HTTPAgent {
+  readonly suspended: boolean
+  readonly resumed: Promise<void> | null
   readonly sockets: IterableIterator<TCPSocket>
   readonly freeSockets: IterableIterator<TCPSocket>
 
@@ -112,6 +114,8 @@ export interface HTTPAgent {
 
   addRequest(req: HTTPClientRequest, opts: TCPSocketOptions & TCPSocketConnectOptions): void
 
+  suspend(): void
+  resume(): void
   destroy(): void
 }
 
