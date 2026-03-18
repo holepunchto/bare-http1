@@ -872,7 +872,7 @@ test('suspend agent', async (t) => {
 
   agent.suspend()
 
-  t.ok(agent.suspended)
+  t.is(agent.suspended, true)
   t.execution(agent.resumed)
 
   await sub
@@ -881,7 +881,7 @@ test('suspend agent', async (t) => {
 
   agent.resume()
 
-  t.absent(agent.suspended)
+  t.is(agent.suspended, false)
   t.absent(agent.resumed)
 
   http
