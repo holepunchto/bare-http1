@@ -179,7 +179,7 @@ export interface HTTPServerConnectionOptions {
 
 export interface HTTPServerConnection {
   readonly server: HTTPServer
-  readonly socket: TCPSocket
+  readonly socket: TCPSocket | null
 
   readonly req: HTTPIncomingMessage | null
   readonly res: HTTPServerResponse | null
@@ -228,7 +228,7 @@ export interface HTTPClientConnectionOptions {
 }
 
 export interface HTTPClientConnection {
-  readonly socket: TCPSocket
+  readonly socket: TCPSocket | null
 
   readonly req: HTTPClientRequest | null
   readonly res: HTTPIncomingMessage | null
