@@ -854,6 +854,45 @@ test('reuse port after closing server', async (t) => {
   await sub
 })
 
+test('suspend agent', async (t) => {
+  t.plan(8)
+
+  const sub = t.test()
+  sub.plan(1)
+
+  const server = http.createServer((req, res) => res.end()).listen(0)
+
+  await waitForServer(server)
+
+  const agent = new http.Agent({ port: server.address().port })
+
+  const req = http.request({ agent }).end()
+
+  req.socket.on('close', () => sub.pass('socket closed'))
+
+  agent.suspend()
+
+  t.ok(agent.suspended)
+  t.execution(agent.resumed)
+
+  await sub
+
+  await t.exception(() => http.request({ agent }), /AGENT_SUSPENDED/)
+
+  agent.resume()
+
+  t.absent(agent.suspended)
+  t.absent(agent.resumed)
+
+  http
+    .request({ agent }, () => {
+      t.pass()
+
+      server.close(() => t.pass('server closed'))
+    })
+    .end()
+})
+
 function waitForServer(server) {
   return new Promise((resolve, reject) => {
     server.on('listening', done)
