@@ -38,7 +38,7 @@
   "dependencies": {
     "bare-events": "^2.6.0",
     "bare-http-parser": "^1.1.1",
-    "bare-stream": "^2.3.0",
+    "bare-stream": "^2.10.0",
     "bare-tcp": "^2.2.0"
   },
   "devDependencies": {
