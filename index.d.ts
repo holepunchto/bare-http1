@@ -154,8 +154,8 @@ export { HTTPServer as Server }
 
 export interface HTTPServerResponse extends HTTPOutgoingMessage {
   readonly req: HTTPIncomingMessage
-  readonly statusCode: HTTPStatusCode
-  readonly statusMessage: HTTPStatusMessage | null
+  statusCode: HTTPStatusCode
+  statusMessage: HTTPStatusMessage | null
 
   writeHead(
     statusCode: HTTPStatusCode,

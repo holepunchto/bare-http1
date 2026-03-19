@@ -3,7 +3,7 @@ const tcp = require('bare-tcp')
 const http = require('.')
 
 test('basic', async (t) => {
-  t.plan(23)
+  t.plan(24)
 
   const server = http.createServer()
 
@@ -26,6 +26,9 @@ test('basic', async (t) => {
       t.ok(res.socket)
       t.is(res.req, req)
       t.is(res.headersSent, false, 'headers not flushed')
+
+      res.statusCode = 201
+      res.statusMessage = 'All good'
 
       t.is(req.socket, res.socket)
 
@@ -63,7 +66,8 @@ test('basic', async (t) => {
   )
 
   t.absent(req.error)
-  t.is(req.response.statusCode, 200)
+  t.is(req.response.statusCode, 201)
+  t.is(req.response.statusMessage, 'All good')
   t.alike(Buffer.concat(req.response.chunks), Buffer.from('Hello world!'))
 
   server.close(() => t.pass('server closed'))
@@ -919,6 +923,7 @@ function request(opts, cb) {
     client.on('response', (res) => {
       const r = (result.response = {
         statusCode: res.statusCode,
+        statusMessage: res.statusMessage,
         headers: res.headers,
         ended: false,
         chunks: []
