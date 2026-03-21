@@ -28,6 +28,7 @@ export interface HTTPIncomingMessageEvents extends ReadableEvents {
 }
 
 export interface HTTPIncomingMessageOptions {
+  headers?: Record<string, string | number>
   method?: HTTPMethod
   url?: string
   statusCode?: HTTPStatusCode
@@ -38,12 +39,12 @@ interface HTTPIncomingMessage<
   M extends HTTPIncomingMessageEvents = HTTPIncomingMessageEvents
 > extends Readable<M> {
   readonly socket: TCPSocket
-  readonly headers: Record<string, string | number>
   readonly upgrade: boolean
-  readonly method: HTTPMethod
-  readonly url: string
-  readonly statusCode: HTTPStatusCode
-  readonly statusMessage: HTTPStatusMessage
+  headers: Record<string, string | number>
+  method: HTTPMethod
+  url: string
+  statusCode: HTTPStatusCode
+  statusMessage: HTTPStatusMessage
   readonly httpVersion: '1.1'
 
   getHeader(name: string): string | number | undefined
@@ -56,11 +57,7 @@ interface HTTPIncomingMessage<
 declare class HTTPIncomingMessage<
   M extends HTTPIncomingMessageEvents = HTTPIncomingMessageEvents
 > extends Readable<M> {
-  protected constructor(
-    socket?: TCPSocket,
-    headers?: Record<string, string | number>,
-    opts?: HTTPIncomingMessageOptions
-  )
+  constructor(socket?: TCPSocket, opts?: HTTPIncomingMessageOptions)
 }
 
 export { type HTTPIncomingMessage, HTTPIncomingMessage as IncomingMessage }
@@ -73,9 +70,9 @@ interface HTTPOutgoingMessage<
   M extends HTTPOutgoingMessageEvents = HTTPOutgoingMessageEvents
 > extends Writable<M> {
   readonly socket: TCPSocket
-  readonly headers: Record<string, string | number>
-  readonly headersSent: boolean
   readonly upgrade: boolean
+  readonly headersSent: boolean
+  headers: Record<string, string | number>
 
   getHeader(name: string): string | number | undefined
   getHeaders(): Record<string, string | number>
@@ -166,7 +163,7 @@ interface HTTPServerResponse extends HTTPOutgoingMessage {
 }
 
 declare class HTTPServerResponse extends HTTPOutgoingMessage {
-  constructor(socket: TCPSocket, req: HTTPIncomingMessage, close: boolean)
+  constructor(socket: TCPSocket, req: HTTPIncomingMessage)
 }
 
 export { type HTTPServerResponse, HTTPServerResponse as ServerResponse }
