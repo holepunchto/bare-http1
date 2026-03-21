@@ -29,24 +29,21 @@ export interface HTTPIncomingMessageEvents extends ReadableEvents {
 
 export interface HTTPIncomingMessageOptions {
   method?: HTTPMethod
-  url?: URL | string
+  url?: string
   statusCode?: HTTPStatusCode
   statusMessage?: HTTPStatusMessage
 }
 
-export interface HTTPIncomingMessage<
+interface HTTPIncomingMessage<
   M extends HTTPIncomingMessageEvents = HTTPIncomingMessageEvents
 > extends Readable<M> {
   readonly socket: TCPSocket
   readonly headers: Record<string, string | number>
   readonly upgrade: boolean
-
   readonly method: HTTPMethod
-  readonly url: URL | string
-
+  readonly url: string
   readonly statusCode: HTTPStatusCode
   readonly statusMessage: HTTPStatusMessage
-
   readonly httpVersion: '1.1'
 
   getHeader(name: string): string | number | undefined
@@ -56,21 +53,23 @@ export interface HTTPIncomingMessage<
   setTimeout(ms: number, ontimeout?: () => void): this
 }
 
-class HTTPIncomingMessage extends Readable {
-  constructor(
+declare class HTTPIncomingMessage<
+  M extends HTTPIncomingMessageEvents = HTTPIncomingMessageEvents
+> extends Readable<M> {
+  protected constructor(
     socket?: TCPSocket,
     headers?: Record<string, string | number>,
     opts?: HTTPIncomingMessageOptions
   )
 }
 
-export { HTTPIncomingMessage as IncomingMessage }
+export { type HTTPIncomingMessage, HTTPIncomingMessage as IncomingMessage }
 
 export interface HTTPOutgoingMessageEvents extends WritableEvents {
   timeout: []
 }
 
-export interface HTTPOutgoingMessage<
+interface HTTPOutgoingMessage<
   M extends HTTPOutgoingMessageEvents = HTTPOutgoingMessageEvents
 > extends Writable<M> {
   readonly socket: TCPSocket
@@ -87,31 +86,29 @@ export interface HTTPOutgoingMessage<
   setTimeout(ms: number, ontimeout?: () => void): this
 }
 
-class HTTPOutgoingMessage extends Writable {
-  constructor(socket?: TCPSocket)
+declare class HTTPOutgoingMessage<
+  M extends HTTPOutgoingMessageEvents = HTTPOutgoingMessageEvents
+> extends Writable<M> {
+  protected constructor(socket?: TCPSocket)
 }
 
-export { HTTPOutgoingMessage as OutgoingMessage }
+export { type HTTPOutgoingMessage, HTTPOutgoingMessage as OutgoingMessage }
 
 export interface HTTPAgentOptions {
   keepAlive?: boolean
   keepAliveMsecs?: number
 }
 
-export interface HTTPAgent {
+interface HTTPAgent {
   readonly suspended: boolean
   readonly resumed: Promise<void> | null
   readonly sockets: IterableIterator<TCPSocket>
   readonly freeSockets: IterableIterator<TCPSocket>
 
   createConnection(opts?: TCPSocketOptions & TCPSocketConnectOptions): TCPSocket
-
   reuseSocket(socket: TCPSocket, req?: HTTPClientRequest): void
-
   keepSocketAlive(socket: TCPSocket): boolean
-
   getName(opts: { host: string; port: number }): string
-
   addRequest(req: HTTPClientRequest, opts: TCPSocketOptions & TCPSocketConnectOptions): void
 
   suspend(): void
@@ -119,15 +116,17 @@ export interface HTTPAgent {
   destroy(): void
 }
 
-class HTTPAgent {
+declare class HTTPAgent {
   constructor(opts?: HTTPAgentOptions & TCPSocketOptions & TCPSocketConnectOptions)
+}
 
-  static readonly global: HTTPAgent
+declare namespace HTTPAgent {
+  export const global: HTTPAgent
 }
 
 export const globalAgent: HTTPAgent
 
-export { HTTPAgent as Agent }
+export { type HTTPAgent, HTTPAgent as Agent }
 
 export interface HTTPServerEvents extends TCPServerEvents {
   request: [req: HTTPIncomingMessage, res: HTTPServerResponse]
@@ -135,13 +134,13 @@ export interface HTTPServerEvents extends TCPServerEvents {
   timeout: [socket: TCPSocket]
 }
 
-export interface HTTPServer<M extends HTTPServerEvents = HTTPServerEvents> extends TCPServer<M> {
+interface HTTPServer<M extends HTTPServerEvents = HTTPServerEvents> extends TCPServer<M> {
   readonly timeout: number | undefined
 
   setTimeout(ms: number, ontimeout?: () => void): this
 }
 
-class HTTPServer extends TCPServer {
+declare class HTTPServer<M extends HTTPServerEvents = HTTPServerEvents> extends TCPServer<M> {
   constructor(
     opts?: HTTPServerConnectionOptions,
     onrequest?: (req: HTTPIncomingMessage, res: HTTPServerResponse) => void
@@ -150,9 +149,9 @@ class HTTPServer extends TCPServer {
   constructor(onrequest: (req: HTTPIncomingMessage, res: HTTPServerResponse) => void)
 }
 
-export { HTTPServer as Server }
+export { type HTTPServer, HTTPServer as Server }
 
-export interface HTTPServerResponse extends HTTPOutgoingMessage {
+interface HTTPServerResponse extends HTTPOutgoingMessage {
   readonly req: HTTPIncomingMessage
   statusCode: HTTPStatusCode
   statusMessage: HTTPStatusMessage | null
@@ -166,34 +165,32 @@ export interface HTTPServerResponse extends HTTPOutgoingMessage {
   writeHead(statusCode: HTTPStatusCode, headers?: Record<string, string | number>): void
 }
 
-class HTTPServerResponse extends HTTPOutgoingMessage {
+declare class HTTPServerResponse extends HTTPOutgoingMessage {
   constructor(socket: TCPSocket, req: HTTPIncomingMessage, close: boolean)
 }
 
-export { HTTPServerResponse as ServerResponse }
+export { type HTTPServerResponse, HTTPServerResponse as ServerResponse }
 
 export interface HTTPServerConnectionOptions {
   IncomingMessage?: typeof HTTPIncomingMessage
   ServerResponse?: typeof HTTPServerResponse
 }
 
-export interface HTTPServerConnection {
+interface HTTPServerConnection {
   readonly server: HTTPServer
   readonly socket: TCPSocket | null
-
   readonly req: HTTPIncomingMessage | null
   readonly res: HTTPServerResponse | null
-
   readonly idle: boolean
 }
 
-class HTTPServerConnection {
+declare class HTTPServerConnection {
   constructor(server: HTTPServer, socket: TCPSocket, opts?: HTTPServerConnectionOptions)
 
   static for(socket: TCPSocket): HTTPServerConnection
 }
 
-export { HTTPServerConnection as ServerConnection }
+export { type HTTPServerConnection, HTTPServerConnection as ServerConnection }
 
 export interface HTTPClientRequestEvents extends HTTPOutgoingMessageEvents {
   response: [res: HTTPIncomingMessage]
@@ -207,7 +204,7 @@ export interface HTTPClientRequestOptions extends TCPSocketConnectOptions {
   path?: string
 }
 
-export interface HTTPClientRequest<
+interface HTTPClientRequest<
   M extends HTTPClientRequestEvents = HTTPClientRequestEvents
 > extends HTTPOutgoingMessage<M> {
   readonly method: HTTPMethod
@@ -215,28 +212,28 @@ export interface HTTPClientRequest<
   readonly headers: Record<string, string | number>
 }
 
-class HTTPClientRequest extends HTTPOutgoingMessage {
+declare class HTTPClientRequest<
+  M extends HTTPClientRequestEvents = HTTPClientRequestEvents
+> extends HTTPOutgoingMessage<M> {
   constructor(opts?: HTTPClientRequestOptions, onresponse?: () => void)
 
   constructor(onresponse: () => void)
 }
 
-export { HTTPClientRequest as ClientRequest }
+export { type HTTPClientRequest, HTTPClientRequest as ClientRequest }
 
 export interface HTTPClientConnectionOptions {
   IncomingMessage?: typeof HTTPIncomingMessage
 }
 
-export interface HTTPClientConnection {
+interface HTTPClientConnection {
   readonly socket: TCPSocket | null
-
   readonly req: HTTPClientRequest | null
   readonly res: HTTPIncomingMessage | null
-
   readonly idle: boolean
 }
 
-class HTTPClientConnection {
+declare class HTTPClientConnection {
   constructor(socket: TCPSocket, opts?: HTTPClientConnectionOptions)
 
   static for(socket: TCPSocket): HTTPClientConnection | null
@@ -244,7 +241,7 @@ class HTTPClientConnection {
   static from(socket: TCPSocket, opts?: HTTPClientConnectionOptions): HTTPClientConnection
 }
 
-export { HTTPClientConnection as ClientConnection }
+export { type HTTPClientConnection, HTTPClientConnection as ClientConnection }
 
 export function createServer(
   opts?: HTTPServerConnectionOptions,
