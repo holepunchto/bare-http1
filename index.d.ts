@@ -86,7 +86,7 @@ interface HTTPOutgoingMessage<
 declare class HTTPOutgoingMessage<
   M extends HTTPOutgoingMessageEvents = HTTPOutgoingMessageEvents
 > extends Writable<M> {
-  protected constructor(socket?: TCPSocket)
+  constructor(socket?: TCPSocket)
 }
 
 export { type HTTPOutgoingMessage, HTTPOutgoingMessage as OutgoingMessage }
