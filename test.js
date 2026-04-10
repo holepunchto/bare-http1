@@ -811,7 +811,7 @@ test('socket reuse, socket closes after timeout', async (t) => {
 
   const agent = new http.Agent({ port: server.address().port, keepAlive: true, timeout: 500 })
 
-  let req = http
+  const req = http
     .request({ agent }, (res) => {
       res.on('close', () => sub.pass('response closed')).resume()
 
@@ -936,8 +936,10 @@ function request(opts, cb) {
     })
 
     client.on('close', () => {
-      if (result.response)
+      if (result.response) {
         result.response.chunks = result.response.chunks.map((c) => Buffer.from(c, 'hex'))
+      }
+
       resolve(result)
     })
 
