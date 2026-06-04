@@ -897,6 +897,112 @@ test('suspend agent', async (t) => {
     .end()
 })
 
+test('setHeader rejects CRLF in header value', (t) => {
+  t.plan(1)
+
+  const server = http.createServer((req, res) => {
+    t.exception(
+      () => res.setHeader('x-evil', 'value\r\nInjected-Header: pwned'),
+      /INVALID_HEADER_VALUE/
+    )
+    res.end()
+  })
+
+  server.listen(0, async () => {
+    await request({ port: server.address().port, path: '/' })
+    server.close()
+  })
+})
+
+test('setHeader rejects invalid characters in header name', (t) => {
+  t.plan(1)
+
+  const server = http.createServer((req, res) => {
+    t.exception(() => res.setHeader('bad header', 'value'), /INVALID_HEADER_NAME/)
+    res.end()
+  })
+
+  server.listen(0, async () => {
+    await request({ port: server.address().port, path: '/' })
+    server.close()
+  })
+})
+
+test('statusMessage setter rejects CRLF', (t) => {
+  t.plan(1)
+
+  const server = http.createServer((req, res) => {
+    t.exception(() => {
+      res.statusMessage = 'OK\r\nInjected-Header: pwned'
+    }, /INVALID_HEADER_VALUE/)
+    res.end()
+  })
+
+  server.listen(0, async () => {
+    await request({ port: server.address().port, path: '/' })
+    server.close()
+  })
+})
+
+test('writeHead rejects CRLF in status message and header values', (t) => {
+  t.plan(2)
+
+  const server = http.createServer((req, res) => {
+    t.exception(() => res.writeHead(200, 'OK\r\nInjected: x'), /INVALID_HEADER_VALUE/)
+    t.exception(
+      () => res.writeHead(200, { 'x-evil': 'value\r\nInjected: x' }),
+      /INVALID_HEADER_VALUE/
+    )
+    res.end()
+  })
+
+  server.listen(0, async () => {
+    await request({ port: server.address().port, path: '/' })
+    server.close()
+  })
+})
+
+test('client request rejects CRLF in header value', (t) => {
+  t.plan(1)
+
+  t.exception(
+    () =>
+      new http.ClientRequest({
+        agent: false,
+        path: '/',
+        headers: { 'x-evil': 'value\r\nInjected-Header: pwned' }
+      }),
+    /INVALID_HEADER_VALUE/
+  )
+})
+
+test('client request rejects CRLF in path', (t) => {
+  t.plan(1)
+
+  t.exception(
+    () =>
+      new http.ClientRequest({
+        agent: false,
+        path: '/evil\r\nGET /admin HTTP/1.1'
+      }),
+    /INVALID_HEADER_VALUE/
+  )
+})
+
+test('client request rejects invalid method', (t) => {
+  t.plan(1)
+
+  t.exception(
+    () =>
+      new http.ClientRequest({
+        agent: false,
+        method: 'GET\r\nEvil',
+        path: '/'
+      }),
+    /INVALID_HEADER_NAME/
+  )
+})
+
 function waitForServer(server) {
   return new Promise((resolve, reject) => {
     server.on('listening', done)
