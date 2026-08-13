@@ -858,6 +858,97 @@ test('reuse port after closing server', async (t) => {
   await sub
 })
 
+test('socket closes when the agent does not keep it alive', async (t) => {
+  t.plan(4)
+
+  // A raw server, as it must leave its own side of the connection open when the
+  // client half-closes.
+  const server = await halfOpenServer()
+
+  const agent = new http.Agent({ port: server.address().port, keepAlive: false })
+
+  const req = http.request({ agent }, (res) => res.resume())
+
+  const closed = new Promise((resolve) => req.socket.on('close', resolve))
+
+  req.end()
+
+  await closed
+
+  t.pass('socket closed')
+  t.is([...agent.sockets].length, 0, 'no sockets left')
+  t.is([...agent.freeSockets].length, 0, 'no free sockets left')
+
+  await closeServer(server)
+
+  t.pass('server closed')
+})
+
+test('socket closes when the peer half-closes it', async (t) => {
+  t.plan(4)
+
+  const server = await halfOpenServer({ end: true })
+
+  const agent = new http.Agent({ port: server.address().port, keepAlive: true })
+
+  // The response is deliberately left unconsumed, so the socket is still in use
+  // by the time the peer half-closes it.
+  const req = http.request({ agent })
+
+  const closed = new Promise((resolve) => req.socket.on('close', resolve))
+
+  req.end()
+
+  await closed
+
+  t.pass('socket closed')
+  t.is([...agent.sockets].length, 0, 'no sockets left')
+  t.is([...agent.freeSockets].length, 0, 'no free sockets left')
+
+  await closeServer(server)
+
+  t.pass('server closed')
+})
+
+test('reused socket is tracked once', async (t) => {
+  t.plan(7)
+
+  const server = http.createServer((req, res) => res.end('response')).listen(0)
+
+  await waitForServer(server)
+
+  const agent = new http.Agent({ port: server.address().port, keepAlive: true })
+
+  let socket = null
+
+  for (let i = 0; i < 3; i++) {
+    const responded = new Promise((resolve) => {
+      const req = http.request({ agent }, (res) => {
+        res.on('close', resolve).resume()
+      })
+
+      if (socket === null) socket = req.socket
+      else t.is(req.socket, socket, 'socket reused')
+
+      req.end()
+    })
+
+    await responded
+
+    t.is([...agent.sockets].length, 1, 'socket tracked once')
+  }
+
+  const closed = new Promise((resolve) => socket.on('close', resolve))
+
+  agent.destroy()
+
+  await closed
+
+  t.is([...agent.sockets].length, 0, 'no sockets left')
+
+  server.close(() => t.pass('server closed'))
+})
+
 test('suspend agent', async (t) => {
   t.plan(8)
 
@@ -1002,6 +1093,37 @@ test('client request rejects invalid method', (t) => {
     /INVALID_HEADER_NAME/
   )
 })
+
+// A raw HTTP server that responds to any request and then leaves its side of
+// the connection open, half-closing it first if `end` is set. Used to keep a
+// connection in a state that `http.Server` would tear down on its own.
+async function halfOpenServer(opts = {}) {
+  const { end = false } = opts
+
+  const server = tcp.createServer((socket) => {
+    socket.on('error', () => {})
+
+    socket.once('data', () => {
+      socket.write(Buffer.from('HTTP/1.1 200 OK\r\nContent-Length: 8\r\n\r\nresponse'))
+
+      if (end) socket.end()
+    })
+  })
+
+  server.listen(0)
+
+  await waitForServer(server)
+
+  return server
+}
+
+function closeServer(server) {
+  return new Promise((resolve) => {
+    server.close(resolve)
+
+    for (const socket of server.connections) socket.destroy()
+  })
+}
 
 function waitForServer(server) {
   return new Promise((resolve, reject) => {
