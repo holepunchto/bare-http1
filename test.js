@@ -799,6 +799,89 @@ test('socket reuse, destroy first response', async (t) => {
   server.close(() => t.pass('server closed'))
 })
 
+test('socket is not pooled while it is being destroyed', async (t) => {
+  t.plan(3)
+
+  const server = http.createServer((req, res) => res.end('response')).listen(0)
+
+  await waitForServer(server)
+
+  const agent = new http.Agent({ port: server.address().port, keepAlive: true })
+
+  // The socket is captured up front, as the request lets go of it when the
+  // response ends.
+  let socket
+
+  const req = http.request({ agent }, (res) => {
+    socket = req.socket
+
+    res.destroy()
+  })
+
+  const closed = new Promise((resolve) => req.on('close', resolve))
+
+  req.end()
+
+  await closed
+
+  // Destroying the response destroys the socket, which may not emit `close`
+  // until several ticks later, so the socket must not be handed back out in
+  // the meantime.
+  t.is(socket.destroying, true, 'socket is being destroyed')
+  t.is([...agent.freeSockets].length, 0, 'socket not pooled')
+
+  agent.destroy()
+
+  await closeServer(server)
+
+  t.pass('server closed')
+})
+
+test('pooled socket is not reused once it is being destroyed', async (t) => {
+  t.plan(5)
+
+  const server = http.createServer((req, res) => res.end('response')).listen(0)
+
+  await waitForServer(server)
+
+  const agent = new http.Agent({ port: server.address().port, keepAlive: true })
+
+  const first = http.request({ agent }, (res) => res.resume())
+
+  const socket = first.socket
+
+  first.end()
+
+  await new Promise((resolve) => first.on('close', resolve))
+
+  t.is([...agent.freeSockets].length, 1, 'socket pooled')
+
+  // The socket is destroyed and reused within the same tick, so it is still
+  // pooled by the time the second request asks for a socket.
+  socket.destroy()
+
+  t.is([...agent.freeSockets].length, 1, 'socket still pooled')
+
+  const sub = t.test('second request')
+  sub.plan(1)
+
+  const second = http.request({ agent }, (res) => {
+    res.on('data', (data) => sub.alike(data, Buffer.from('response')))
+  })
+
+  // Asserted before awaiting the response, as reusing the socket leaves the
+  // second request without one.
+  t.not(second.socket, socket, 'socket not reused')
+
+  second.on('close', () => agent.destroy()).end()
+
+  await sub
+
+  await closeServer(server)
+
+  t.pass('server closed')
+})
+
 test('socket reuse, socket closes after timeout', async (t) => {
   t.plan(2)
 
