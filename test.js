@@ -3943,9 +3943,17 @@ test('a connection whose request body went unread still counts as idle', async (
 
   // Would otherwise wait for the headers deadline to reclaim the connection.
   await new Promise((resolve) => {
-    server.close(resolve)
+    const timer = setTimeout(() => {
+      t.fail('server did not close')
+      resolve()
+    }, 2000)
 
-    setTimeout(() => t.fail('server did not close'), 2000).unref()
+    timer.unref()
+
+    server.close(() => {
+      clearTimeout(timer)
+      resolve()
+    })
   })
 
   t.pass('server closed')
@@ -3986,6 +3994,344 @@ test('a request that fails mid response is not answered over the response', asyn
   t.ok(raw.includes('200 OK'), 'response sent')
   t.absent(raw.includes('400 Bad Request'), 'no error response spliced in')
   t.is(raw.split('HTTP/1.1').length - 1, 1, 'only one status line on the wire')
+
+  await closeServer(server)
+
+  t.pass('server closed')
+})
+
+// A name that leads with the field delimiter is an unusual token but a valid
+// one, and rewriting its case must not rewrite the name itself: dropping the
+// leading `-` would put a second framing header on the wire, past the framing
+// the response had already settled on.
+test('a header name that leads with a hyphen keeps it', async (t) => {
+  t.plan(4)
+
+  const server = http
+    .createServer((req, res) => {
+      res.setHeader('-content-length', '999')
+      res.setHeader('-', 'x')
+      res.end('hello')
+    })
+    .listen(0)
+
+  await waitForServer(server)
+
+  const raw = await rawRequest(
+    server.address().port,
+    'GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n'
+  )
+
+  t.ok(raw.includes('-Content-Length: 999\r\n'), 'the hyphen is kept')
+  t.ok(raw.includes('-: x\r\n'), 'a name that is only a hyphen is kept')
+  t.is(
+    raw.split('\r\nContent-Length:').length - 1,
+    1,
+    'only the framing content length on the wire'
+  )
+
+  await closeServer(server)
+
+  t.pass('server closed')
+})
+
+test('a request header name that leads with a hyphen keeps it', async (t) => {
+  t.plan(3)
+
+  const server = tcp.createServer((socket) => {
+    socket.on('error', () => {})
+
+    socket.once('data', (data) => {
+      const raw = data.toString()
+
+      t.ok(raw.includes('-Content-Length: 999\r\n'), 'the hyphen is kept')
+      t.is(raw.split('\r\nContent-Length:').length - 1, 1, 'one content length on the wire')
+
+      socket.write(Buffer.from('HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n'))
+    })
+  })
+
+  server.listen(0)
+
+  await waitForServer(server)
+
+  await request(
+    {
+      port: server.address().port,
+      method: 'POST',
+      agent: false,
+      headers: { '-content-length': '999' }
+    },
+    (client) => client.end('hello')
+  )
+
+  await closeServer(server)
+
+  t.pass('server closed')
+})
+
+// The parser spends its instruction to skip the body on the first set of
+// headers it completes, and an interim response is not the one the request was
+// waiting for. Reading the real response as though it carried a body would take
+// the bytes of whatever followed on the connection.
+test('a HEAD response after an interim response carries no body', async (t) => {
+  t.plan(4)
+
+  const server = tcp.createServer((socket) => {
+    socket.on('error', () => {})
+
+    socket.once('data', () => {
+      socket.write(
+        Buffer.from(
+          'HTTP/1.1 103 Early Hints\r\nLink: </s.css>; rel=preload\r\n\r\n' +
+            'HTTP/1.1 200 OK\r\nContent-Length: 42\r\nX-Marker: real\r\n\r\n'
+        )
+      )
+
+      // What a following response on the connection would be. A desynced client
+      // reads these as the body of the response above.
+      setTimeout(() => {
+        socket.write(Buffer.from('HTTP/1.1 500 Server Error\r\nContent-Length: 0\r\n\r\n'))
+      }, 100)
+    })
+  })
+
+  server.listen(0)
+
+  await waitForServer(server)
+
+  const interim = []
+
+  const result = await request(
+    { port: server.address().port, method: 'HEAD', agent: false },
+    (client) => {
+      client.on('information', (info) => interim.push(info.statusCode))
+      client.end()
+    }
+  )
+
+  t.alike(interim, [103], 'the interim response was surfaced')
+  t.is(result.response.statusCode, 200, 'the real response was surfaced')
+  t.is(
+    Buffer.concat(result.response.chunks).byteLength,
+    0,
+    'no body was read for the HEAD response'
+  )
+
+  await closeServer(server)
+
+  t.pass('server closed')
+})
+
+// A request that has arrived and is only waiting for the connection to free up
+// is already in hand. Counting that as idle would put the peer back on the
+// headers deadline while its request is being handled.
+test('a pipelined request is not answered against the headers timeout', async (t) => {
+  t.plan(4)
+
+  const server = http
+    .createServer({ headersTimeout: 200, requestTimeout: 0 }, (req, res) => {
+      setTimeout(() => res.end(req.url), 500)
+    })
+    .listen(0)
+
+  await waitForServer(server)
+
+  const port = server.address().port
+
+  // Both requests arrive at once, so the second one is held back until the
+  // first has been answered, and is then handled for longer than the headers
+  // deadline it must not be subject to.
+  const raw = await rawRequest(
+    port,
+    'GET /a HTTP/1.1\r\nHost: localhost\r\n\r\n' +
+      'GET /b HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n'
+  )
+
+  t.is(raw.split('HTTP/1.1 200 OK').length - 1, 2, 'both requests answered')
+  t.ok(raw.includes('/a'), 'the first response was sent')
+  t.ok(raw.includes('/b'), 'the second response was sent')
+
+  await closeServer(server)
+
+  t.pass('server closed')
+})
+
+test('a pipelined request does not leave the connection idle', async (t) => {
+  t.plan(2)
+
+  const server = http.createServer((req, res) => setTimeout(() => res.end(req.url), 300)).listen(0)
+
+  await waitForServer(server)
+
+  const socket = tcp.createConnection(server.address().port, 'localhost')
+
+  socket.on('error', () => {})
+
+  socket.write(
+    Buffer.from(
+      'GET /a HTTP/1.1\r\nHost: localhost\r\n\r\nGET /b HTTP/1.1\r\nHost: localhost\r\n\r\n'
+    )
+  )
+
+  // Waits for the first response, at which point the second request is in hand
+  // and waiting for the connection.
+  await waitFor(socket, 'data')
+
+  const connection = http.ServerConnection.for([...server.connections][0])
+
+  t.absent(connection.idle, 'a connection with a request in hand is not idle')
+
+  socket.destroy()
+
+  await closeServer(server)
+
+  t.pass('server closed')
+})
+
+// A body that was answered without being read leaves the connection paused on
+// backpressure, and a paused connection has no deadline running against it, so
+// the peer could otherwise hold it open for good.
+test('a request body left unread does not hold the connection open', async (t) => {
+  t.plan(2)
+
+  const server = http
+    .createServer({ headersTimeout: 0, requestTimeout: 300 }, (req, res) => {
+      res.end('ok') // Body deliberately left unread
+    })
+    .listen(0)
+
+  await waitForServer(server)
+
+  const reclaimed = new Promise((resolve) => {
+    server.on('connection', (connection) => {
+      connection.on('close', () => resolve(true))
+    })
+
+    const timer = setTimeout(() => resolve(false), 2000)
+
+    timer.unref()
+  })
+
+  const socket = tcp.createConnection(server.address().port, 'localhost')
+
+  socket.on('error', () => {})
+
+  socket.on('connect', () => {
+    // Announces far more than it sends, so the request never finishes arriving
+    // and the stream fills up.
+    socket.write(
+      Buffer.from('POST / HTTP/1.1\r\nHost: localhost\r\nContent-Length: 1048576\r\n\r\n')
+    )
+    socket.write(Buffer.alloc(65536, 0x61))
+  })
+
+  t.ok(await reclaimed, 'the connection was reclaimed by the request deadline')
+
+  socket.destroy()
+
+  await closeServer(server)
+
+  t.pass('server closed')
+})
+
+// A socket that has been handed over to another protocol is no longer ours:
+// offering it back to the agent as free would write the next request, and
+// whatever it carries, into an established tunnel or upgraded stream.
+test('an upgraded socket is not offered back to the agent', async (t) => {
+  t.plan(3)
+
+  const server = tcp.createServer((socket) => {
+    socket.on('error', () => {})
+
+    socket.once('data', () => {
+      socket.write(
+        Buffer.from(
+          'HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n'
+        )
+      )
+    })
+  })
+
+  server.listen(0)
+
+  await waitForServer(server)
+
+  const agent = new http.Agent({ keepAlive: true })
+
+  const req = http.request({
+    port: server.address().port,
+    path: '/ws',
+    agent,
+    headers: { connection: 'Upgrade', upgrade: 'websocket' }
+  })
+
+  req.on('error', () => {})
+
+  const upgraded = waitFor(req, 'upgrade')
+
+  req.end()
+
+  const res = await upgraded
+
+  t.pass('the connection was handed over')
+
+  // A consumer that drains the response object is what used to release the
+  // socket back into the pool.
+  res.resume()
+
+  await pause(100)
+
+  t.is([...agent.freeSockets].length, 0, 'the handed over socket is not pooled')
+
+  agent.destroy()
+
+  await closeServer(server)
+
+  t.pass('server closed')
+})
+
+test('a tunnelled socket is not offered back to the agent', async (t) => {
+  t.plan(3)
+
+  const server = tcp.createServer((socket) => {
+    socket.on('error', () => {})
+
+    socket.once('data', () => {
+      socket.write(Buffer.from('HTTP/1.1 200 Connection Established\r\n\r\n'))
+    })
+  })
+
+  server.listen(0)
+
+  await waitForServer(server)
+
+  const agent = new http.Agent({ keepAlive: true })
+
+  const req = http.request({
+    port: server.address().port,
+    method: 'CONNECT',
+    path: 'example.org:443',
+    agent
+  })
+
+  req.on('error', () => {})
+
+  const connected = waitFor(req, 'connect')
+
+  req.end()
+
+  const res = await connected
+
+  t.pass('the tunnel was established')
+
+  res.resume()
+
+  await pause(100)
+
+  t.is([...agent.freeSockets].length, 0, 'the tunnelled socket is not pooled')
+
+  agent.destroy()
 
   await closeServer(server)
 
