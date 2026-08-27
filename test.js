@@ -997,6 +997,99 @@ test('pipelined requests are answered in order', async (t) => {
   await closeServer(server)
 })
 
+// A peer that said it is closing, or that was told so, gets one more answer and
+// no more. Serving what it pipelined behind that message is what lets a request
+// an intermediary stopped forwarding be acted on here.
+test('a request pipelined behind one that closes the connection is not served', async (t) => {
+  t.plan(4)
+
+  const served = []
+
+  const server = http
+    .createServer((req, res) => {
+      served.push(req.url)
+      res.end(req.url)
+    })
+    .listen(0)
+
+  await waitForServer(server)
+
+  const raw = await rawRequest(
+    server.address().port,
+    'GET /first HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n' +
+      'GET /smuggled HTTP/1.1\r\nHost: localhost\r\n\r\n'
+  )
+
+  t.alike(served, ['/first'], 'only the request that could be answered was served')
+  t.ok(raw.includes('/first'), 'first request answered')
+  t.absent(raw.includes('/smuggled'), 'and nothing came back for the one behind it')
+
+  await closeServer(server)
+
+  t.pass('server closed')
+})
+
+test('a request pipelined behind a response that closes the connection is not served', async (t) => {
+  t.plan(3)
+
+  const served = []
+
+  const server = http
+    .createServer((req, res) => {
+      served.push(req.url)
+
+      // The request asked for nothing, so it is this side giving the connection
+      // up that leaves the one behind it unanswerable.
+      res.setHeader('connection', 'close')
+      res.end(req.url)
+    })
+    .listen(0)
+
+  await waitForServer(server)
+
+  const raw = await rawRequest(
+    server.address().port,
+    'GET /first HTTP/1.1\r\nHost: localhost\r\n\r\n' +
+      'GET /smuggled HTTP/1.1\r\nHost: localhost\r\n\r\n'
+  )
+
+  t.alike(served, ['/first'], 'only the request that could be answered was served')
+  t.ok(raw.includes('/first'), 'first request answered')
+
+  await closeServer(server)
+
+  t.pass('server closed')
+})
+
+// An HTTP/1.0 peer that did not ask for the connection to be kept is closing by
+// default, so the same holds without it having said anything.
+test('an HTTP/1.0 request does not have a pipelined request served behind it', async (t) => {
+  t.plan(2)
+
+  const served = []
+
+  const server = http
+    .createServer((req, res) => {
+      served.push(req.url)
+      res.end(req.url)
+    })
+    .listen(0)
+
+  await waitForServer(server)
+
+  await rawRequest(
+    server.address().port,
+    'GET /first HTTP/1.0\r\nHost: localhost\r\n\r\n' +
+      'GET /smuggled HTTP/1.1\r\nHost: localhost\r\n\r\n'
+  )
+
+  t.alike(served, ['/first'], 'only the request that could be answered was served')
+
+  await closeServer(server)
+
+  t.pass('server closed')
+})
+
 test('protocol negotiation', async (t) => {
   const sub = t.test()
   sub.plan(7)
@@ -1090,6 +1183,137 @@ test('close connection if missing upgrade handler', async (t) => {
   await sub
 
   server.close()
+})
+
+// The switch happens once the message asking for it is complete, so a body it
+// announced is still the request's own. Handing that over as the first bytes of
+// the new protocol both loses it and lets the peer choose what they are.
+test('an upgrade takes effect only once the request is complete', async (t) => {
+  t.plan(3)
+
+  const server = http.createServer().listen(0)
+
+  await waitForServer(server)
+
+  const handed = new Promise((resolve) => {
+    server.on('upgrade', (req, socket, head) => {
+      const chunks = []
+
+      req
+        .on('data', (data) => chunks.push(data))
+        .on('end', () => resolve({ body: Buffer.concat(chunks), head }))
+
+      socket.end()
+    })
+  })
+
+  await rawBytes(
+    server.address().port,
+    'POST / HTTP/1.1\r\n' +
+      'Host: localhost\r\n' +
+      'Upgrade: weird-protocol\r\n' +
+      'Connection: Upgrade\r\n' +
+      'Content-Length: 5\r\n' +
+      '\r\n' +
+      'hello' +
+      'first frame'
+  )
+
+  const { body, head } = await handed
+
+  t.alike(body, Buffer.from('hello'), 'the announced body belongs to the request')
+  t.alike(head, Buffer.from('first frame'), 'and only what follows it is handed over')
+
+  await closeServer(server)
+
+  t.pass('server closed')
+})
+
+test('an upgrade with a chunked body takes effect once the body is decoded', async (t) => {
+  t.plan(3)
+
+  const server = http.createServer().listen(0)
+
+  await waitForServer(server)
+
+  const handed = new Promise((resolve) => {
+    server.on('upgrade', (req, socket, head) => {
+      const chunks = []
+
+      req
+        .on('data', (data) => chunks.push(data))
+        .on('end', () => resolve({ body: Buffer.concat(chunks), head }))
+
+      socket.end()
+    })
+  })
+
+  await rawBytes(
+    server.address().port,
+    'POST / HTTP/1.1\r\n' +
+      'Host: localhost\r\n' +
+      'Upgrade: weird-protocol\r\n' +
+      'Connection: Upgrade\r\n' +
+      'Transfer-Encoding: chunked\r\n' +
+      '\r\n' +
+      '5\r\nhello\r\n0\r\n\r\n' +
+      'first frame'
+  )
+
+  const { body, head } = await handed
+
+  t.alike(body, Buffer.from('hello'), 'the body is decoded for the request')
+  t.alike(head, Buffer.from('first frame'), 'and the coding does not reach the handover')
+
+  await closeServer(server)
+
+  t.pass('server closed')
+})
+
+// An upgrade is a request as well as an offer, so one nobody took is still
+// answerable, and Node.js answers it. A tunnel has no such fallback: no response
+// would make sense of a `CONNECT`.
+test('an upgrade nobody is there to take is served as an ordinary request', async (t) => {
+  t.plan(3)
+
+  const server = http.createServer((req, res) => res.end('ordinary')).listen(0)
+
+  await waitForServer(server)
+
+  const raw = await rawRequest(
+    server.address().port,
+    'GET / HTTP/1.1\r\n' +
+      'Host: localhost\r\n' +
+      'Upgrade: weird-protocol\r\n' +
+      'Connection: Upgrade, close\r\n' +
+      '\r\n'
+  )
+
+  t.ok(raw.startsWith('HTTP/1.1 200 OK'), 'answered as a request')
+  t.ok(raw.endsWith('ordinary'), 'by the request handler')
+
+  await closeServer(server)
+
+  t.pass('server closed')
+})
+
+test('a tunnel nobody is there to take takes the connection down', async (t) => {
+  t.plan(2)
+
+  const server = http.createServer((req, res) => res.end('ordinary')).listen(0)
+
+  await waitForServer(server)
+
+  const raw = await rawBytes(
+    server.address().port,
+    'CONNECT localhost:443 HTTP/1.1\r\nHost: localhost\r\n\r\n'
+  )
+
+  t.is(raw.length, 0, 'nothing was answered')
+
+  await closeServer(server)
+
+  t.pass('server closed')
 })
 
 test('expect 100-continue is answered automatically', async (t) => {
@@ -5264,6 +5488,61 @@ test('a request to an IPv6 URL resolves', async (t) => {
   const { response } = await request({ host: '::1', port, agent: false })
 
   t.is(response.statusCode, 200, 'and the options form still works')
+
+  await closeServer(server)
+
+  t.pass('server closed')
+})
+
+// A URL is only where the request starts out. Taking its word over what the
+// caller asked for would quietly undo whatever they did to the path before
+// handing it over, so the options decide, as they do under Node.js.
+test('the options given with a URL take precedence over it', async (t) => {
+  t.plan(6)
+
+  const lines = []
+
+  const server = http
+    .createServer((req, res) => {
+      lines.push(`${req.method} ${req.url} ${req.headers.host}`)
+      res.end()
+    })
+    .listen(0)
+
+  await waitForServer(server)
+
+  const { port } = server.address()
+
+  const send = (url, opts) =>
+    new Promise((resolve, reject) => {
+      const client = http.request(url, { agent: false, ...opts }, (res) => {
+        res.on('data', () => {})
+        res.on('end', resolve)
+      })
+
+      client.on('error', reject)
+      client.end()
+    })
+
+  await send(`http://localhost:${port}/from-url?q=1`)
+
+  t.is(lines.shift(), `GET /from-url?q=1 localhost:${port}`, 'the URL is used on its own')
+
+  await send(`http://localhost:${port}/from-url?q=1`, { path: '/from-opts', method: 'POST' })
+
+  t.is(lines.shift(), `POST /from-opts localhost:${port}`, 'a path given alongside it wins')
+
+  await send(`http://127.0.0.1:${port}/`, { host: 'localhost', port })
+
+  t.is(lines.shift(), `GET / localhost:${port}`, 'and so does a host')
+
+  await send(`http://127.0.0.1:${port}/`, { hostname: 'localhost', port })
+
+  t.is(lines.shift(), `GET / localhost:${port}`, 'named either way round')
+
+  await send(`http://localhost:${port}/`, { port: String(port) })
+
+  t.is(lines.shift(), `GET / localhost:${port}`, 'and a port still reaches it as a string')
 
   await closeServer(server)
 

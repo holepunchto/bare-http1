@@ -27,25 +27,39 @@ exports.request = function request(url, opts, onresponse) {
   if (typeof opts === 'function') {
     onresponse = opts
     opts = {}
+  } else if (opts === undefined || opts === null) {
+    opts = {}
   }
 
   if (typeof url === 'string') url = new URL(url)
 
   if (isURL(url)) {
-    opts = { ...url, ...opts }
+    // Every part of the URL is only a default that the options given alongside
+    // it may override, as Node.js does.
+    const given = opts
 
-    if (opts.protocol === undefined) opts.protocol = url.protocol
+    opts = { ...url, ...given }
 
-    opts.host = hostname(url)
-    opts.path = url.pathname + url.search
-    opts.port = url.port ? parseInt(url.port, 10) : defaultPort(url)
+    if (given.protocol === undefined) opts.protocol = url.protocol
+    if (given.path === undefined) opts.path = url.pathname + url.search
+    if (given.port === undefined) opts.port = url.port ? parseInt(url.port, 10) : defaultPort(url)
+
+    // The host may be named either way round, so it is only taken from the URL
+    // when the caller named it neither way. What the caller did name is put back
+    // in case a URL-like object carried its own into the merge.
+    opts.host = given.host
+    opts.hostname = given.hostname
+
+    if (given.host === undefined && given.hostname === undefined) {
+      opts.hostname = hostname(url)
+    }
   } else {
     opts = { ...url }
-
-    // For Node.js compatibility
-    opts.host = opts.hostname || opts.host
-    opts.port = typeof opts.port === 'string' ? parseInt(opts.port, 10) : opts.port
   }
+
+  // For Node.js compatibility
+  opts.host = opts.hostname || opts.host
+  opts.port = typeof opts.port === 'string' ? parseInt(opts.port, 10) : opts.port
 
   validateProtocol(opts.protocol)
 
