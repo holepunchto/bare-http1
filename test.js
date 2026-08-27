@@ -2235,6 +2235,964 @@ test('client request rejects invalid method', (t) => {
   )
 })
 
+// A body that does not match what the peer was told to read runs over into the
+// next message on the connection, so it never reaches the socket at all.
+test('response body longer than its content length is not sent', async (t) => {
+  t.plan(3)
+
+  const sub = t.test()
+  sub.plan(1)
+
+  const server = http
+    .createServer((req, res) => {
+      res.on('error', (err) =>
+        sub.is(err.code, 'CONTENT_LENGTH_MISMATCH', 'reported on the response')
+      )
+
+      res.setHeader('Content-Length', '2')
+      res.end('hello world')
+    })
+    .listen(0)
+
+  await waitForServer(server)
+
+  const raw = await rawBytes(
+    server.address().port,
+    'GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n'
+  )
+
+  await sub
+
+  t.is(raw, '', 'nothing sent')
+
+  await closeServer(server)
+
+  t.pass('server closed')
+})
+
+test('response body shorter than its content length is not sent', async (t) => {
+  t.plan(3)
+
+  const sub = t.test()
+  sub.plan(1)
+
+  const server = http
+    .createServer((req, res) => {
+      res.on('error', (err) =>
+        sub.is(err.code, 'CONTENT_LENGTH_MISMATCH', 'reported on the response')
+      )
+
+      res.setHeader('Content-Length', '20')
+      res.end('short')
+    })
+    .listen(0)
+
+  await waitForServer(server)
+
+  const raw = await rawBytes(
+    server.address().port,
+    'GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n'
+  )
+
+  await sub
+
+  t.is(raw, '', 'nothing sent')
+
+  await closeServer(server)
+
+  t.pass('server closed')
+})
+
+// The mismatch that `String#length` gives for anything outside ASCII is the
+// easiest one to write by accident.
+test('content length is counted in bytes, not characters', async (t) => {
+  t.plan(3)
+
+  const sub = t.test()
+  sub.plan(1)
+
+  const body = 'café ❤' // 6 characters, 9 bytes
+
+  const server = http
+    .createServer((req, res) => {
+      res.on('error', (err) =>
+        sub.is(err.code, 'CONTENT_LENGTH_MISMATCH', 'reported on the response')
+      )
+
+      res.setHeader('Content-Length', body.length.toString())
+      res.end(body)
+    })
+    .listen(0)
+
+  await waitForServer(server)
+
+  const raw = await rawBytes(
+    server.address().port,
+    'GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n'
+  )
+
+  await sub
+
+  t.is(raw, '', 'nothing sent')
+
+  await closeServer(server)
+
+  t.pass('server closed')
+})
+
+// A content length the peer would read as a different number, or not as a
+// number at all, leaves the body unframed.
+test('content length that is not a count of bytes is refused', async (t) => {
+  t.plan(3)
+
+  const sub = t.test()
+  sub.plan(1)
+
+  const server = http
+    .createServer((req, res) => {
+      res.on('error', (err) =>
+        sub.is(err.code, 'INVALID_CONTENT_LENGTH', 'reported on the response')
+      )
+
+      res.setHeader('Content-Length', '2 ')
+      res.end('hi')
+    })
+    .listen(0)
+
+  await waitForServer(server)
+
+  const raw = await rawBytes(
+    server.address().port,
+    'GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n'
+  )
+
+  await sub
+
+  t.is(raw, '', 'nothing sent')
+
+  await closeServer(server)
+
+  t.pass('server closed')
+})
+
+// A zero length chunk is what terminates a chunked body, so writing one before
+// the end would finish the response early and turn the rest into a second one.
+test('zero length write does not terminate a chunked body', async (t) => {
+  t.plan(3)
+
+  const server = http
+    .createServer((req, res) => {
+      res.write('aaa')
+      res.write(Buffer.alloc(0))
+      res.write('')
+      res.end('bbb')
+    })
+    .listen(0)
+
+  await waitForServer(server)
+
+  const raw = await rawRequest(
+    server.address().port,
+    'GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n'
+  )
+
+  t.ok(raw.includes('Transfer-Encoding: chunked\r\n'), 'chunked')
+  t.ok(raw.endsWith('\r\n\r\n3\r\naaa\r\n3\r\nbbb\r\n0\r\n\r\n'), 'one body, terminated once')
+
+  await closeServer(server)
+
+  t.pass('server closed')
+})
+
+test('zero length write does not split a response in two', async (t) => {
+  t.plan(3)
+
+  const server = http
+    .createServer((req, res) => {
+      if (req.url === '/first') {
+        res.write('aa')
+        res.write(Buffer.alloc(0))
+        res.end('bb')
+      } else {
+        res.end('second')
+      }
+    })
+    .listen(0)
+
+  await waitForServer(server)
+
+  const raw = await rawRequest(
+    server.address().port,
+    'GET /first HTTP/1.1\r\nHost: localhost\r\n\r\n' +
+      'GET /second HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n'
+  )
+
+  t.is(raw.split('HTTP/1.1 200 OK').length - 1, 2, 'one response each')
+  t.ok(raw.includes('2\r\naa\r\n2\r\nbb\r\n0\r\n\r\nHTTP/1.1 200 OK'), 'bodies not split')
+
+  await closeServer(server)
+
+  t.pass('server closed')
+})
+
+// A peer reads no body for these, so anything written for one would be read as
+// the start of the next response.
+test('status that carries no body is sent without one', async (t) => {
+  t.plan(4)
+
+  const server = http
+    .createServer((req, res) => {
+      res.statusCode = Number(req.url.slice(1))
+      res.end('injected')
+    })
+    .listen(0)
+
+  await waitForServer(server)
+
+  for (const status of [204, 304, 100]) {
+    const raw = await rawRequest(
+      server.address().port,
+      `GET /${status} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n`
+    )
+
+    t.is(
+      raw,
+      `HTTP/1.1 ${status} ${http.STATUS_CODES[status]}\r\nConnection: close\r\n` +
+        raw.slice(raw.indexOf('Date: ')),
+      `${status} carries neither a body nor a length`
+    )
+  }
+
+  await closeServer(server)
+
+  t.pass('server closed')
+})
+
+test('status that carries no body does not split a response in two', async (t) => {
+  t.plan(3)
+
+  const server = http
+    .createServer((req, res) => {
+      if (req.url === '/first') {
+        res.statusCode = 204
+        res.end('INJECTED')
+      } else {
+        res.end('second')
+      }
+    })
+    .listen(0)
+
+  await waitForServer(server)
+
+  const raw = await rawRequest(
+    server.address().port,
+    'GET /first HTTP/1.1\r\nHost: localhost\r\n\r\n' +
+      'GET /second HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n'
+  )
+
+  t.is(raw.includes('INJECTED'), false, 'nothing written for the 204')
+  t.is(raw.split(/HTTP\/1\.1 \d\d\d/).length - 1, 2, 'one status line each')
+
+  await closeServer(server)
+
+  t.pass('server closed')
+})
+
+// A 304 stands in for a response that would have had a body, so it may carry
+// the length of the one it is replacing.
+test('a 304 keeps a content length that was set for it', async (t) => {
+  t.plan(3)
+
+  const server = http
+    .createServer((req, res) => {
+      res.statusCode = 304
+      res.setHeader('Content-Length', '100')
+      res.end()
+    })
+    .listen(0)
+
+  await waitForServer(server)
+
+  const raw = await rawRequest(
+    server.address().port,
+    'GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n'
+  )
+
+  t.ok(raw.includes('Content-Length: 100\r\n'), 'length kept')
+  t.is(raw.includes('Transfer-Encoding'), false, 'not chunked')
+
+  await closeServer(server)
+
+  t.pass('server closed')
+})
+
+// Sending both framing headers is the classic way to have two peers disagree
+// about where a message ends.
+test('transfer encoding set by the caller is announced once and alone', async (t) => {
+  t.plan(4)
+
+  const server = http
+    .createServer((req, res) => {
+      res.setHeader('Transfer-Encoding', 'chunked')
+
+      if (req.url === '/split') {
+        res.write('hel')
+        res.end('lo')
+      } else {
+        res.end('hello')
+      }
+    })
+    .listen(0)
+
+  await waitForServer(server)
+
+  for (const path of ['/one', '/split']) {
+    const raw = await rawRequest(
+      server.address().port,
+      `GET ${path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n`
+    )
+
+    t.is(raw.split('Transfer-Encoding: chunked\r\n').length - 1, 1, `announced once for ${path}`)
+    t.is(raw.includes('Content-Length'), false, `no content length for ${path}`)
+  }
+
+  await closeServer(server)
+})
+
+test('transfer encoding that is not chunked is refused', async (t) => {
+  t.plan(3)
+
+  const sub = t.test()
+  sub.plan(1)
+
+  const server = http
+    .createServer((req, res) => {
+      res.on('error', (err) =>
+        sub.is(err.code, 'INVALID_TRANSFER_ENCODING', 'reported on the response')
+      )
+
+      res.setHeader('Transfer-Encoding', 'gzip')
+      res.end('hello')
+    })
+    .listen(0)
+
+  await waitForServer(server)
+
+  const raw = await rawBytes(
+    server.address().port,
+    'GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n'
+  )
+
+  await sub
+
+  t.is(raw, '', 'nothing sent')
+
+  await closeServer(server)
+
+  t.pass('server closed')
+})
+
+// The same framing hazards apply to a request, where the peer reading the
+// surplus is a server that will act on it.
+test('request body longer than its content length is not sent', async (t) => {
+  t.plan(3)
+
+  const server = tcp.createServer((socket) => {
+    socket.on('error', () => {})
+    socket.on('data', () => t.fail('nothing should be sent'))
+  })
+
+  server.listen(0)
+
+  await waitForServer(server)
+
+  const agent = new http.Agent({ port: server.address().port })
+
+  const req = http.request({ agent, method: 'POST' })
+
+  req.setHeader('Content-Length', '2')
+  req.end('SMUGGLED BODY')
+
+  const err = await waitFor(req, 'error')
+
+  t.is(err.code, 'CONTENT_LENGTH_MISMATCH', 'reported on the request')
+
+  agent.destroy()
+
+  await closeServer(server)
+
+  t.pass('server closed')
+
+  await pause(100)
+
+  t.pass('nothing reached the peer')
+})
+
+test('request that carries no body drops the framing it announced', async (t) => {
+  t.plan(3)
+
+  const sub = t.test()
+  sub.plan(2)
+
+  const server = http
+    .createServer((req, res) => {
+      sub.is(req.headers['content-length'], undefined, 'no content length')
+      sub.is(req.headers['transfer-encoding'], undefined, 'not chunked')
+
+      res.end('ok')
+    })
+    .listen(0)
+
+  await waitForServer(server)
+
+  const agent = new http.Agent({ port: server.address().port })
+
+  // A server told to read a body that never arrives reads the next request as
+  // one instead.
+  const result = await request({ agent, headers: { 'content-length': '5' } })
+
+  await sub
+
+  t.is(result.response.statusCode, 200, 'request understood')
+
+  agent.destroy()
+
+  await closeServer(server)
+
+  t.pass('server closed')
+})
+
+// A list cannot be folded onto one line when its own values may contain the
+// separator, which is why `Set-Cookie` may only ever appear once per line.
+test('a list header value is sent as one field per element', async (t) => {
+  t.plan(3)
+
+  const server = http
+    .createServer((req, res) => {
+      res.setHeader('Set-Cookie', ['a=1; Expires=Thu, 01 Jan 2099 00:00:00 GMT', 'b=2'])
+      res.end('ok')
+    })
+    .listen(0)
+
+  await waitForServer(server)
+
+  const raw = await rawRequest(
+    server.address().port,
+    'GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n'
+  )
+
+  t.ok(
+    raw.includes('Set-Cookie: a=1; Expires=Thu, 01 Jan 2099 00:00:00 GMT\r\n'),
+    'first cookie intact'
+  )
+  t.ok(raw.includes('Set-Cookie: b=2\r\n'), 'second cookie on its own line')
+
+  await closeServer(server)
+
+  t.pass('server closed')
+})
+
+// `Cookie` is the exception: it may only appear once, and its list separator is
+// `; ` rather than a comma.
+test('a cookie list header value is folded onto one line', async (t) => {
+  t.plan(2)
+
+  const server = http
+    .createServer((req, res) => {
+      res.setHeader('Cookie', ['a=1', 'b=2'])
+      res.end('ok')
+    })
+    .listen(0)
+
+  await waitForServer(server)
+
+  const raw = await rawRequest(
+    server.address().port,
+    'GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n'
+  )
+
+  t.ok(raw.includes('Cookie: a=1; b=2\r\n'), 'folded with the right separator')
+
+  await closeServer(server)
+
+  t.pass('server closed')
+})
+
+// A header bag that inherits from `Object.prototype` answers for names nobody
+// set, and `__proto__` changes the bag rather than being stored in it.
+test('header lookups ignore anything not actually set', (t) => {
+  const res = new http.ServerResponse(null, new http.IncomingMessage())
+
+  for (const name of ['constructor', '__proto__', 'toString', 'hasOwnProperty']) {
+    t.is(res.hasHeader(name), false, `${name} is not a header`)
+    t.is(res.getHeader(name), undefined, `${name} has no value`)
+  }
+
+  const req = new http.IncomingMessage(null, { headers: { 'x-real': 'yes' } })
+
+  t.is(req.hasHeader('constructor'), false, 'not a header on a request either')
+  t.is(req.hasHeader('x-real'), true, 'a header that was set is found')
+})
+
+test('header name that would reach the prototype is refused', (t) => {
+  const res = new http.ServerResponse(null, new http.IncomingMessage())
+
+  t.exception(() => res.setHeader('__proto__', { 'content-length': '999' }), /INVALID_HEADER_NAME/)
+  t.exception(() => res.setHeader('__PROTO__', 'x'), /INVALID_HEADER_NAME/)
+
+  // The framing decision reads the header bag, so a bag whose prototype had
+  // been replaced would leave the response unframed altogether.
+  t.is(res.hasHeader('content-length'), false, 'nothing was stored')
+})
+
+test('incoming header name that would reach the prototype is refused', async (t) => {
+  t.plan(3)
+
+  const sub = t.test()
+  sub.plan(1)
+
+  const server = http
+    .createServer((req, res) => {
+      sub.fail('request should not be dispatched')
+      res.end()
+    })
+    .listen(0)
+
+  server.on('clientError', (err) => sub.is(err.code, 'INVALID_HEADER', 'rejected by the parser'))
+
+  await waitForServer(server)
+
+  const raw = await rawBytes(
+    server.address().port,
+    'GET / HTTP/1.1\r\nHost: localhost\r\n__proto__: polluted\r\nConnection: close\r\n\r\n'
+  )
+
+  await sub
+
+  t.is(raw, '', 'no response')
+
+  await closeServer(server)
+
+  t.pass('server closed')
+})
+
+// Without backpressure a peer decides how much of a body the process holds on
+// to, whether anything is reading it or not.
+test('request body is not buffered past what is being read', async (t) => {
+  t.plan(3)
+
+  const total = 8 * 1024 * 1024
+
+  let req = null
+
+  const server = http
+    .createServer((r) => {
+      req = r // Deliberately never read, as a handler answering 401 would not.
+    })
+    .listen(0)
+
+  await waitForServer(server)
+
+  const socket = tcp.createConnection(server.address().port, 'localhost')
+
+  socket.on('error', () => {})
+
+  socket.write(
+    Buffer.from(`POST / HTTP/1.1\r\nHost: localhost\r\nContent-Length: ${total}\r\n\r\n`)
+  )
+
+  const chunk = Buffer.alloc(64 * 1024, 0x61)
+
+  for (let sent = 0; sent < total; sent += chunk.byteLength) {
+    socket.write(chunk)
+
+    await pause(0)
+  }
+
+  await pause(200)
+
+  t.ok(req !== null, 'request dispatched')
+
+  // Reaching into the stream is the only way to see what is being held, and
+  // holding a bounded amount is the whole point.
+  t.ok(req._readableState.buffered < total / 8, 'body is not all in memory')
+
+  socket.destroy()
+
+  await closeServer(server)
+
+  t.pass('server closed')
+})
+
+test('request body still arrives in full when it is read slowly', async (t) => {
+  t.plan(3)
+
+  const total = 4 * 1024 * 1024
+
+  const sub = t.test()
+  sub.plan(1)
+
+  const server = http
+    .createServer((req, res) => {
+      let received = 0
+
+      req
+        .on('data', (data) => {
+          received += data.byteLength
+        })
+        .on('end', () => {
+          sub.is(received, total, 'body received in full')
+
+          res.end('ok')
+        })
+        .resume()
+    })
+    .listen(0)
+
+  await waitForServer(server)
+
+  const socket = tcp.createConnection(server.address().port, 'localhost')
+
+  socket.on('error', () => {}).on('data', () => {})
+
+  socket.write(
+    Buffer.from(`POST / HTTP/1.1\r\nHost: localhost\r\nContent-Length: ${total}\r\n\r\n`)
+  )
+
+  const chunk = Buffer.alloc(64 * 1024, 0x61)
+
+  for (let sent = 0; sent < total; sent += chunk.byteLength) {
+    socket.write(chunk)
+
+    await pause(0)
+  }
+
+  await sub
+
+  t.pass('body read to the end')
+
+  socket.destroy()
+
+  await closeServer(server)
+
+  t.pass('server closed')
+})
+
+test('response body is not buffered past what is being read', async (t) => {
+  t.plan(3)
+
+  const total = 8 * 1024 * 1024
+
+  const server = tcp.createServer((socket) => {
+    socket.on('error', () => {})
+
+    socket.once('data', () => {
+      socket.write(Buffer.from(`HTTP/1.1 200 OK\r\nContent-Length: ${total}\r\n\r\n`))
+
+      const chunk = Buffer.alloc(64 * 1024, 0x62)
+
+      let sent = 0
+
+      const write = () => {
+        for (let i = 0; i < 16 && sent < total; i++) {
+          socket.write(chunk)
+          sent += chunk.byteLength
+        }
+
+        if (sent < total) setTimeout(write, 0)
+      }
+
+      write()
+    })
+  })
+
+  server.listen(0)
+
+  await waitForServer(server)
+
+  const agent = new http.Agent({ port: server.address().port })
+
+  let res = null
+
+  const req = http.request({ agent })
+
+  req.on('error', () => {})
+  req.on('response', (r) => {
+    res = r // Deliberately never read.
+    r.on('error', () => {})
+  })
+  req.end()
+
+  await pause(600)
+
+  t.ok(res !== null, 'response received')
+  t.ok(res._readableState.buffered < total / 8, 'body is not all in memory')
+
+  agent.destroy()
+
+  await closeServer(server)
+
+  t.pass('server closed')
+})
+
+// A peer that answers twice is trying to have the second answer paired up with
+// whatever request comes next on the connection.
+test('second response on the same connection is refused', async (t) => {
+  t.plan(4)
+
+  const server = await rawServer(
+    'HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nAA' +
+      'HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nBB'
+  )
+
+  const agent = new http.Agent({ keepAlive: true, port: server.address().port })
+
+  let responses = 0
+
+  const req = http.request({ agent })
+
+  req.on('error', () => {})
+  req.on('response', (res) => {
+    responses++
+
+    res.on('error', () => {})
+    res.resume()
+  })
+  req.end()
+
+  await pause(300)
+
+  t.is(responses, 1, 'only the answer to the request is delivered')
+
+  // A connection that was pooled twice would hand the same socket to two
+  // requests, and each would read the other's response.
+  const free = [...agent.freeSockets]
+
+  t.is(free.length, 0, 'connection not pooled')
+  t.is(new Set(free).size, free.length, 'no connection pooled twice')
+
+  agent.destroy()
+
+  await closeServer(server)
+
+  t.pass('server closed')
+})
+
+// A peer that never finishes sending its request would otherwise hold on to the
+// connection for as long as it liked.
+test('request headers that never arrive time out', async (t) => {
+  t.plan(3)
+
+  const server = http
+    .createServer({ headersTimeout: 200 }, (req, res) => {
+      t.fail('request should not be dispatched')
+      res.end()
+    })
+    .listen(0)
+
+  await waitForServer(server)
+
+  const raw = await rawBytes(server.address().port, 'GET / HTTP/1.1\r\nHost: localhost\r\n')
+
+  t.ok(raw.startsWith('HTTP/1.1 408 Request Timeout\r\n'), 'peer told why')
+  t.ok(raw.includes('Connection: close\r\n'), 'connection close announced')
+
+  await closeServer(server)
+
+  t.pass('server closed')
+})
+
+test('request body that never arrives times out', async (t) => {
+  t.plan(3)
+
+  const sub = t.test()
+  sub.plan(1)
+
+  const server = http
+    .createServer({ headersTimeout: 0, requestTimeout: 200 }, (req, res) => {
+      req.on('aborted', () => sub.pass('request aborted'))
+      req.resume()
+    })
+    .listen(0)
+
+  await waitForServer(server)
+
+  const raw = await rawBytes(
+    server.address().port,
+    'POST / HTTP/1.1\r\nHost: localhost\r\nContent-Length: 10\r\n\r\nab'
+  )
+
+  await sub
+
+  // A handler may already be part way through answering, so the connection is
+  // cut rather than answered a second time.
+  t.is(raw, '', 'connection cut')
+
+  await closeServer(server)
+
+  t.pass('server closed')
+})
+
+// Time spent waiting on this side is not the peer's fault, so a handler that
+// reads a body slowly must not have it taken away.
+test('request that is read slowly does not time out', async (t) => {
+  t.plan(3)
+
+  const total = 512 * 1024
+
+  const sub = t.test()
+  sub.plan(1)
+
+  const server = http
+    .createServer({ headersTimeout: 0, requestTimeout: 300 }, (req, res) => {
+      let received = 0
+
+      // Read in bursts, so that most of the time is spent not reading.
+      const pump = () => {
+        let data
+
+        while ((data = req.read()) !== null) received += data.byteLength
+
+        if (received < total) return setTimeout(pump, 30)
+
+        sub.is(received, total, 'body received in full')
+
+        res.end('ok')
+      }
+
+      pump()
+    })
+    .listen(0)
+
+  await waitForServer(server)
+
+  const socket = tcp.createConnection(server.address().port, 'localhost')
+
+  socket.on('error', () => {}).on('data', () => {})
+
+  socket.write(
+    Buffer.from(`POST / HTTP/1.1\r\nHost: localhost\r\nContent-Length: ${total}\r\n\r\n`)
+  )
+
+  const chunk = Buffer.alloc(64 * 1024, 0x61)
+
+  for (let sent = 0; sent < total; sent += chunk.byteLength) {
+    socket.write(chunk)
+
+    await pause(0)
+  }
+
+  await sub
+
+  t.pass('body read to the end')
+
+  socket.destroy()
+
+  await closeServer(server)
+
+  t.pass('server closed')
+})
+
+test('timeouts can be turned off', async (t) => {
+  t.plan(2)
+
+  const server = http
+    .createServer({ headersTimeout: 0, requestTimeout: 0 }, (req, res) => res.end('ok'))
+    .listen(0)
+
+  await waitForServer(server)
+
+  t.is(server.headersTimeout, 0, 'headers timeout off')
+
+  const socket = tcp.createConnection(server.address().port, 'localhost')
+
+  const chunks = []
+
+  socket.on('error', () => {}).on('data', (data) => chunks.push(data))
+
+  socket.write(Buffer.from('GET / HTTP/1.1\r\nHost: localhost\r\n'))
+
+  await pause(500)
+
+  // Still waiting for the rest of the headers rather than having given up.
+  t.is(Buffer.concat(chunks).length, 0, 'connection left alone')
+
+  socket.destroy()
+
+  await closeServer(server)
+})
+
+// A body written in more than one go is only known to be too long once part of
+// it is already out, so the connection goes rather than the surplus.
+test('response body longer than its content length is cut off mid stream', async (t) => {
+  t.plan(3)
+
+  const sub = t.test()
+  sub.plan(1)
+
+  const server = http
+    .createServer((req, res) => {
+      res.on('error', (err) =>
+        sub.is(err.code, 'CONTENT_LENGTH_MISMATCH', 'reported on the response')
+      )
+
+      res.setHeader('Content-Length', '6')
+      res.write('first ')
+      res.write('SURPLUS')
+      res.end()
+    })
+    .listen(0)
+
+  await waitForServer(server)
+
+  const raw = await rawBytes(
+    server.address().port,
+    'GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n'
+  )
+
+  await sub
+
+  t.is(raw.includes('SURPLUS'), false, 'surplus never reaches the peer')
+
+  await closeServer(server)
+
+  t.pass('server closed')
+})
+
+test('a 304 content length that is not a count of bytes is refused', async (t) => {
+  t.plan(3)
+
+  const sub = t.test()
+  sub.plan(1)
+
+  const server = http
+    .createServer((req, res) => {
+      res.on('error', (err) =>
+        sub.is(err.code, 'INVALID_CONTENT_LENGTH', 'reported on the response')
+      )
+
+      res.statusCode = 304
+      res.setHeader('Content-Length', 'lots')
+      res.end()
+    })
+    .listen(0)
+
+  await waitForServer(server)
+
+  const raw = await rawBytes(
+    server.address().port,
+    'GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n'
+  )
+
+  await sub
+
+  t.is(raw, '', 'nothing sent')
+
+  await closeServer(server)
+
+  t.pass('server closed')
+})
+
 // A raw HTTP server that responds to any request and then leaves its side of
 // the connection open, half-closing it first if `end` is set. Used to keep a
 // connection in a state that `http.Server` would tear down on its own.
@@ -2307,6 +3265,32 @@ function rawRequest(port, request, opts = {}) {
         }
       })
       .on('end', () => resolve(Buffer.concat(chunks).toString()))
+
+    socket.write(Buffer.from(request))
+  })
+}
+
+// Sends raw bytes and collects whatever comes back, resolving once the peer has
+// gone away for whatever reason. Unlike `rawRequest`, a connection that is reset
+// rather than closed is not an error, which is what a message that could not be
+// framed safely looks like from the outside.
+function rawBytes(port, request) {
+  return new Promise((resolve) => {
+    const socket = tcp.createConnection(port, 'localhost')
+
+    const chunks = []
+
+    const done = () => {
+      socket.destroy()
+
+      resolve(Buffer.concat(chunks).toString())
+    }
+
+    socket
+      .on('error', done)
+      .on('data', (data) => chunks.push(data))
+      .on('end', done)
+      .on('close', done)
 
     socket.write(Buffer.from(request))
   })
