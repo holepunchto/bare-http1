@@ -3196,6 +3196,603 @@ test('a 304 content length that is not a count of bytes is refused', async (t) =
 // A raw HTTP server that responds to any request and then leaves its side of
 // the connection open, half-closing it first if `end` is set. Used to keep a
 // connection in a state that `http.Server` would tear down on its own.
+test('a request that fails to parse mid body is still answered', async (t) => {
+  const server = http.createServer((req, res) => {
+    req.resume()
+    req.on('end', () => res.end('ok'))
+  })
+
+  server.listen(0)
+
+  await waitForServer(server)
+
+  // The headers parse, so a request exists and is mid body when the chunk size
+  // turns out to be nonsense. Destroying the request must not take the socket
+  // down with it, or the answer never reaches the peer.
+  const response = await rawBytes(
+    server.address().port,
+    'POST / HTTP/1.1\r\nHost: localhost\r\nTransfer-Encoding: chunked\r\n\r\nZZZZ\r\n'
+  )
+
+  t.ok(response.includes('400 Bad Request'), 'the peer is told the request was bad')
+
+  await closeServer(server)
+
+  t.pass('server closed')
+})
+
+test('a clientError handler can answer a request that failed mid body', async (t) => {
+  const server = http.createServer((req, res) => req.resume())
+
+  server.on('clientError', (err, socket) => {
+    socket.end('HTTP/1.1 400 Bad Request\r\nContent-Length: 7\r\n\r\nrefused')
+  })
+
+  server.listen(0)
+
+  await waitForServer(server)
+
+  const response = await rawBytes(
+    server.address().port,
+    'POST / HTTP/1.1\r\nHost: localhost\r\nTransfer-Encoding: chunked\r\n\r\nZZZZ\r\n'
+  )
+
+  t.ok(response.includes('refused'), "the application's own answer reaches the peer")
+
+  await closeServer(server)
+
+  t.pass('server closed')
+})
+
+test('an aborted request reports the reason to whoever is listening', async (t) => {
+  t.plan(3)
+
+  const sub = t.test()
+  sub.plan(2)
+
+  const server = http.createServer((req, res) => {
+    req.on('aborted', () => sub.pass('request aborted'))
+    req.on('error', (err) => sub.is(err.code, 'REQUEST_TIMEOUT', 'reason reported'))
+    req.resume()
+  })
+
+  server.requestTimeout = 100
+
+  server.listen(0)
+
+  await waitForServer(server)
+
+  await rawBytes(
+    server.address().port,
+    'POST / HTTP/1.1\r\nHost: localhost\r\nContent-Length: 10\r\n\r\nab'
+  )
+
+  await sub
+
+  t.pass('reason reported on the request')
+
+  await closeServer(server)
+
+  t.pass('server closed')
+})
+
+test('an aborted request with nobody listening is not an unhandled error', async (t) => {
+  t.plan(3)
+
+  const sub = t.test()
+  sub.plan(1)
+
+  const server = http.createServer((req, res) => {
+    // Deliberately no error listener, which must not take the process down.
+    req.on('aborted', () => sub.pass('request aborted'))
+    req.resume()
+  })
+
+  server.requestTimeout = 100
+
+  server.listen(0)
+
+  await waitForServer(server)
+
+  await rawBytes(
+    server.address().port,
+    'POST / HTTP/1.1\r\nHost: localhost\r\nContent-Length: 10\r\n\r\nab'
+  )
+
+  await sub
+
+  t.pass('survived without an error listener')
+
+  await closeServer(server)
+
+  t.pass('server closed')
+})
+
+test('connection upgrade without an upgrade header is an ordinary request', async (t) => {
+  t.plan(3)
+
+  const sub = t.test()
+  sub.plan(1)
+
+  const server = http.createServer((req, res) => {
+    sub.pass('handled as a request')
+    res.end('ok')
+  })
+
+  // Naming no protocol, the peer has not asked for an upgrade, so it must not
+  // be able to take the socket away from the request handler.
+  server.on('upgrade', () => sub.fail('must not be handled as an upgrade'))
+
+  server.listen(0)
+
+  await waitForServer(server)
+
+  const response = await rawRequest(
+    server.address().port,
+    'GET / HTTP/1.1\r\nHost: localhost\r\nConnection: upgrade, close\r\n\r\n'
+  )
+
+  t.ok(response.includes('200 OK'), 'answered as a request')
+
+  await sub
+
+  await closeServer(server)
+
+  t.pass('server closed')
+})
+
+test('a response that claims an upgrade without naming one is an ordinary response', async (t) => {
+  t.plan(3)
+
+  const sub = t.test()
+  sub.plan(1)
+
+  const server = await rawServer(
+    'HTTP/1.1 200 OK\r\nConnection: upgrade\r\nContent-Length: 2\r\n\r\nok',
+    { end: true }
+  )
+
+  const req = http.request({ port: server.address().port, agent: false }, (res) => {
+    sub.is(res.statusCode, 200, 'delivered as a response')
+    res.resume()
+  })
+
+  // A peer that names no protocol has not offered an upgrade, so it must not be
+  // able to take the socket away from the consumer waiting on a response.
+  req.on('upgrade', () => sub.fail('must not be handled as an upgrade'))
+  req.on('error', () => {})
+  req.end()
+
+  await sub
+
+  t.pass('response delivered')
+
+  await closeServer(server)
+
+  t.pass('server closed')
+})
+
+test('a connection reused from the response close handler still reads', async (t) => {
+  t.plan(3)
+
+  const sub = t.test()
+  sub.plan(1)
+
+  const server = tcp.createServer((socket) => {
+    socket.on('error', () => {})
+
+    socket.on('data', () =>
+      socket.write(Buffer.from('HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok'))
+    )
+  })
+
+  server.listen(0)
+
+  await waitForServer(server)
+
+  const agent = new http.Agent({ port: server.address().port, keepAlive: true })
+
+  const first = http.request({ agent }, (res) => {
+    // The socket goes back into the pool here, before the first request has
+    // closed, so the connection must not mistake that close for the second
+    // request's and forget which request it is on.
+    res.on('close', () => {
+      const second = http.request({ agent }, (res2) => {
+        sub.is(res2.statusCode, 200, 'the reused connection still reads responses')
+
+        res2.resume()
+        res2.on('end', () => agent.destroy())
+      })
+
+      second.on('error', () => {})
+      second.end()
+    })
+
+    res.resume()
+  })
+
+  first.on('error', () => {})
+  first.end()
+
+  await sub
+
+  t.pass('connection reused')
+
+  await closeServer(server)
+
+  t.pass('server closed')
+})
+
+test('a 101 that names no protocol is an ordinary response', async (t) => {
+  t.plan(3)
+
+  const sub = t.test()
+  sub.plan(2)
+
+  const server = await rawServer('HTTP/1.1 101 Switching Protocols\r\n\r\n', { end: true })
+
+  const req = http.request({ port: server.address().port, agent: false }, (res) => {
+    sub.is(res.statusCode, 101, 'delivered as a response')
+
+    res.on('data', () => sub.fail('no body expected')).on('end', () => sub.pass('response ended'))
+
+    res.resume()
+  })
+
+  // Having named nothing to switch to, the peer has handed the connection to
+  // no one, so there is nothing to upgrade and nothing still to come.
+  req.on('upgrade', () => sub.fail('must not be handled as an upgrade'))
+  req.on('information', () => sub.fail('must not be handled as interim'))
+  req.on('error', () => {})
+  req.end()
+
+  await sub
+
+  t.pass('response delivered')
+
+  await closeServer(server)
+
+  t.pass('server closed')
+})
+
+test('a connection is not reused after a 101 that names no protocol', async (t) => {
+  t.plan(3)
+
+  const sub = t.test()
+  sub.plan(2)
+
+  // The parser stops reading for good at any 101, so the connection cannot
+  // carry another exchange and must not go back into the pool offering one.
+  // Counted across connections, so the second request is answered wherever it
+  // turns up.
+  let n = 0
+
+  const server = tcp.createServer((socket) => {
+    socket.on('error', () => {})
+
+    socket.on('data', () => {
+      if (++n === 1) socket.write(Buffer.from('HTTP/1.1 101 Switching Protocols\r\n\r\n'))
+      else socket.write(Buffer.from('HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok'))
+    })
+  })
+
+  server.listen(0)
+
+  await waitForServer(server)
+
+  const agent = new http.Agent({ port: server.address().port, keepAlive: true })
+
+  const first = http.request({ agent }, (res) => {
+    const socket = first.socket
+
+    res.on('close', () => {
+      const second = http.request({ agent }, (res2) => {
+        sub.is(res2.statusCode, 200, 'the next request is answered')
+        sub.not(second.socket, socket, 'on a connection of its own')
+
+        res2.resume()
+        res2.on('end', () => agent.destroy())
+      })
+
+      second.on('error', () => {})
+      second.end()
+    })
+
+    res.resume()
+  })
+
+  first.on('error', () => {})
+  first.end()
+
+  await sub
+
+  t.pass('connection not reused')
+
+  await closeServer(server)
+
+  t.pass('server closed')
+})
+
+test('a CONNECT request is handed over as a tunnel', async (t) => {
+  t.plan(4)
+
+  const sub = t.test()
+  sub.plan(2)
+
+  const server = http.createServer(() => sub.fail('must not be handled as a request'))
+
+  server.on('connect', (req, socket, head) => {
+    sub.is(req.url, 'localhost:443', 'authority received')
+    sub.alike(head, Buffer.from('tunnel bytes'), 'head belongs to the tunnel')
+
+    socket.end('HTTP/1.1 200 Connection Established\r\n\r\n')
+  })
+
+  server.listen(0)
+
+  await waitForServer(server)
+
+  const response = await rawBytes(
+    server.address().port,
+    'CONNECT localhost:443 HTTP/1.1\r\nHost: localhost:443\r\n\r\ntunnel bytes'
+  )
+
+  t.ok(response.includes('200 Connection Established'), 'tunnel established')
+
+  await sub
+
+  t.pass('handed over rather than routed to the request handler')
+
+  await closeServer(server)
+
+  t.pass('server closed')
+})
+
+test('a CONNECT response is handed over as a tunnel', async (t) => {
+  t.plan(3)
+
+  const sub = t.test()
+  sub.plan(2)
+
+  const server = await rawServer('HTTP/1.1 200 Connection Established\r\n\r\ntunnel bytes')
+
+  const req = http.request({
+    port: server.address().port,
+    method: 'CONNECT',
+    path: 'localhost:443',
+    agent: false
+  })
+
+  req.on('response', () => sub.fail('must not be delivered as a response'))
+
+  req.on('connect', (res, socket, head) => {
+    sub.is(res.statusCode, 200, 'tunnel established')
+    sub.alike(head, Buffer.from('tunnel bytes'), 'head belongs to the tunnel')
+
+    socket.destroy()
+  })
+
+  req.on('error', () => {})
+  req.end()
+
+  await sub
+
+  t.pass('handed over rather than delivered as a response')
+
+  await closeServer(server)
+
+  t.pass('server closed')
+})
+
+test('a CONNECT request is sent without a body framing', async (t) => {
+  t.plan(2)
+
+  const sub = t.test()
+  sub.plan(1)
+
+  const server = tcp.createServer((socket) => {
+    socket.on('error', () => {})
+
+    socket.once('data', (data) => {
+      // Anything after the headers would belong to the tunnel, so framing a
+      // body the peer would then wait for has nothing to describe.
+      sub.absent(/content-length|transfer-encoding/i.test(data.toString()), 'no framing announced')
+
+      socket.destroy()
+    })
+  })
+
+  server.listen(0)
+
+  await waitForServer(server)
+
+  const req = http.request({
+    port: server.address().port,
+    method: 'CONNECT',
+    path: 'localhost:443',
+    agent: false
+  })
+
+  req.on('error', () => {})
+  req.on('connect', (res, socket) => socket.destroy())
+  req.end()
+
+  await sub
+
+  await closeServer(server)
+
+  t.pass('server closed')
+})
+
+test('a header value that is undefined is refused', (t) => {
+  const res = new http.ServerResponse(null, new http.IncomingMessage())
+
+  // Serializing it would put the string `undefined` on the wire as though the
+  // caller had meant it.
+  t.exception(() => res.setHeader('x-thing', undefined), /INVALID_HEADER_VALUE/)
+  t.exception(() => res.setHeader('x-thing', ['a', undefined]), /INVALID_HEADER_VALUE/)
+  t.exception(() => {
+    res.headers = { 'x-thing': undefined }
+  }, /INVALID_HEADER_VALUE/)
+
+  // A null value is a deliberate one and is left alone, as in Node.js.
+  t.execution(() => res.setHeader('x-null', null))
+})
+
+test('control characters in a header value are refused', (t) => {
+  const res = new http.ServerResponse(null, new http.IncomingMessage())
+
+  for (const c of ['\x00', '\x01', '\x0b', '\x0c', '\r', '\n', '\x7f', ' ']) {
+    t.exception(
+      () => res.setHeader('x-thing', 'a' + c + 'b'),
+      /INVALID_HEADER_VALUE/,
+      `refused ${JSON.stringify(c)}`
+    )
+  }
+
+  // Latin-1 remains allowed, as it does in Node.js.
+  t.execution(() => res.setHeader('x-thing', 'caf\xe9'))
+})
+
+test('control characters in a request path are refused', (t) => {
+  for (const c of ['\x00', '\x01', '\r', '\n', ' ', '\t', '\x80Ā']) {
+    t.exception(
+      () => new http.ClientRequest({ path: '/a' + c, agent: false }),
+      /INVALID_HEADER_VALUE/,
+      `refused ${JSON.stringify(c)}`
+    )
+  }
+})
+
+test('expect 100-continue is not answered for an HTTP/1.0 client', async (t) => {
+  const server = http.createServer((req, res) => {
+    req.resume()
+    req.on('end', () => res.end('ok'))
+  })
+
+  server.listen(0)
+
+  await waitForServer(server)
+
+  // RFC 9110 leaves an HTTP/1.0 client no way to understand a 1xx, so it would
+  // read the 100 as the response to its request.
+  const response = await rawBytes(
+    server.address().port,
+    'POST / HTTP/1.0\r\nHost: localhost\r\nExpect: 100-continue\r\nContent-Length: 2\r\n\r\nhi'
+  )
+
+  t.absent(response.includes('100 Continue'), 'no interim response sent')
+  t.ok(response.includes('200 OK'), 'request answered')
+
+  await closeServer(server)
+
+  t.pass('server closed')
+})
+
+test('writeHead takes the header list forms', async (t) => {
+  const server = http.createServer((req, res) => {
+    if (req.url === '/flat') res.writeHead(200, ['x-a', '1', 'x-b', '2'])
+    else {
+      res.writeHead(200, [
+        ['x-a', '1'],
+        ['x-b', '2']
+      ])
+    }
+
+    res.setHeader('connection', 'close')
+    res.end('ok')
+  })
+
+  server.listen(0)
+
+  await waitForServer(server)
+
+  for (const path of ['/flat', '/pairs']) {
+    const response = await rawRequest(
+      server.address().port,
+      `GET ${path} HTTP/1.1\r\nHost: localhost\r\n\r\n`
+    )
+
+    t.ok(response.includes('X-A: 1'), `first field sent for ${path}`)
+    t.ok(response.includes('X-B: 2'), `second field sent for ${path}`)
+  }
+
+  await closeServer(server)
+
+  t.pass('server closed')
+})
+
+test('writeHead refuses a header list with a name that has no value', (t) => {
+  const res = new http.ServerResponse(null, new http.IncomingMessage())
+
+  t.exception(() => res.writeHead(200, ['x-a', '1', 'x-b']), /INVALID_HEADER_VALUE/)
+})
+
+test('writeHead returns the response', (t) => {
+  const res = new http.ServerResponse(null, new http.IncomingMessage())
+
+  t.is(res.writeHead(200), res, 'chainable, as in Node.js')
+})
+
+test('an HTTP/1.0 client that asks to keep the connection is told that it is kept', async (t) => {
+  const server = http.createServer((req, res) => {
+    res.setHeader('content-length', '2')
+    res.end('ok')
+  })
+
+  server.listen(0)
+
+  await waitForServer(server)
+
+  const port = server.address().port
+
+  // An HTTP/1.0 peer closes the connection unless it is told otherwise, so a
+  // server that keeps it has to say so. The connection stays open afterwards,
+  // so the reply is read up to the end of the body rather than to a close.
+  const kept = await rawUntil(
+    port,
+    'GET / HTTP/1.0\r\nHost: localhost\r\nConnection: keep-alive\r\n\r\n',
+    'ok'
+  )
+
+  t.ok(/Connection: keep-alive/i.test(kept), 'the connection is confirmed as kept')
+
+  const closed = await rawBytes(port, 'GET / HTTP/1.0\r\nHost: localhost\r\n\r\n')
+
+  t.ok(/Connection: close/i.test(closed), 'and closed when it was not asked for')
+
+  await closeServer(server)
+
+  t.pass('server closed')
+})
+
+test('a HEAD response of unknown length announces no framing', async (t) => {
+  const server = http.createServer((req, res) => {
+    // Written in pieces, so the length is not known when the headers go out.
+    res.write('hello')
+    res.end(' there')
+  })
+
+  server.listen(0)
+
+  await waitForServer(server)
+
+  const response = await rawBytes(
+    server.address().port,
+    'HEAD / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n'
+  )
+
+  // Chunked would promise a terminator that is never written, since a HEAD
+  // response carries no body to terminate.
+  t.absent(/Transfer-Encoding/i.test(response), 'no transfer encoding announced')
+  t.absent(/Content-Length/i.test(response), 'no content length announced')
+  t.ok(response.includes('200 OK'), 'headers still sent')
+
+  await closeServer(server)
+
+  t.pass('server closed')
+})
+
 async function halfOpenServer(opts = {}) {
   const { end = false } = opts
 
@@ -3291,6 +3888,30 @@ function rawBytes(port, request) {
       .on('data', (data) => chunks.push(data))
       .on('end', done)
       .on('close', done)
+
+    socket.write(Buffer.from(request))
+  })
+}
+
+// Sends raw bytes and collects whatever comes back until the given marker has
+// been seen, for a connection the peer is expected to keep open.
+function rawUntil(port, request, marker) {
+  return new Promise((resolve, reject) => {
+    const socket = tcp.createConnection(port, 'localhost')
+
+    const chunks = []
+
+    socket.on('error', reject).on('data', (data) => {
+      chunks.push(data)
+
+      const response = Buffer.concat(chunks).toString()
+
+      if (response.includes(marker)) {
+        socket.destroy()
+
+        resolve(response)
+      }
+    })
 
     socket.write(Buffer.from(request))
   })

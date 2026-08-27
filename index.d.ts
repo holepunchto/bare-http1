@@ -77,6 +77,11 @@ export { type HTTPIncomingMessage, HTTPIncomingMessage as IncomingMessage }
 // sent as one field per element rather than folded onto a single line.
 export type HTTPHeaderValue = string | number | (string | number)[]
 
+// A set of fields may be given as a bag, as a flat list of alternating names
+// and values, or as a list of pairs.
+export type HTTPHeaders =
+  Record<string, HTTPHeaderValue> | (string | HTTPHeaderValue)[] | [string, HTTPHeaderValue][]
+
 export interface HTTPOutgoingMessageEvents extends WritableEvents {
   timeout: []
 }
@@ -144,6 +149,7 @@ export interface HTTPServerEvents extends TCPServerEvents {
   request: [req: HTTPIncomingMessage, res: HTTPServerResponse]
   checkContinue: [req: HTTPIncomingMessage, res: HTTPServerResponse]
   upgrade: [req: HTTPIncomingMessage, socket: TCPSocket, head: Buffer]
+  connect: [req: HTTPIncomingMessage, socket: TCPSocket, head: Buffer]
   clientError: [err: HTTPError, socket: TCPSocket]
   timeout: [socket: TCPSocket]
 }
@@ -178,10 +184,10 @@ interface HTTPServerResponse extends HTTPOutgoingMessage {
   writeHead(
     statusCode: HTTPStatusCode,
     statusMessage?: HTTPStatusMessage,
-    headers?: Record<string, HTTPHeaderValue>
-  ): void
+    headers?: HTTPHeaders
+  ): this
 
-  writeHead(statusCode: HTTPStatusCode, headers?: Record<string, HTTPHeaderValue>): void
+  writeHead(statusCode: HTTPStatusCode, headers?: HTTPHeaders): this
 
   writeContinue(): void
 }
@@ -225,6 +231,7 @@ export interface HTTPClientRequestEvents extends HTTPOutgoingMessageEvents {
   response: [res: HTTPIncomingMessage]
   information: [info: HTTPInformationalResponse]
   upgrade: [res: HTTPIncomingMessage, socket: TCPSocket, head: Buffer]
+  connect: [res: HTTPIncomingMessage, socket: TCPSocket, head: Buffer]
 }
 
 export interface HTTPClientRequestOptions extends TCPSocketConnectOptions {
