@@ -244,7 +244,7 @@ test('destroy client socket', async (t) => {
   t.plan(2)
 
   const sub = t.test()
-  sub.plan(1)
+  sub.plan(2)
 
   const server = http
     .createServer((req, res) => {
@@ -256,6 +256,9 @@ test('destroy client socket', async (t) => {
 
   const req = http.request({ port: server.address().port })
 
+  // Nothing answered the request, so losing the socket under it is a failure
+  // of the request, whoever took the socket down.
+  req.on('error', (err) => sub.is(err.code, 'CONNECTION_LOST', 'request failed'))
   req.on('close', () => sub.pass('client socket closed'))
 
   req.socket.destroy()
@@ -1848,7 +1851,7 @@ test('suspend agent', async (t) => {
   t.plan(8)
 
   const sub = t.test()
-  sub.plan(1)
+  sub.plan(2)
 
   const server = http.createServer((req, res) => res.end()).listen(0)
 
@@ -1858,6 +1861,9 @@ test('suspend agent', async (t) => {
 
   const req = http.request({ agent }).end()
 
+  // Suspending takes the connection out from under a request that was never
+  // answered, which the request is told about.
+  req.on('error', (err) => sub.is(err.code, 'CONNECTION_LOST', 'request failed'))
   req.socket.on('close', () => sub.pass('socket closed'))
 
   agent.suspend()
@@ -4338,6 +4344,527 @@ test('a tunnelled socket is not offered back to the agent', async (t) => {
   t.pass('server closed')
 })
 
+// A socket whose closing this side has decided on has to be taken all the way
+// down, since the peer is under no obligation to close its own side and one
+// that never does would hold on to the connection for good.
+
+test('a malformed request takes the connection with it', async (t) => {
+  t.plan(3)
+
+  const server = http.createServer((req, res) => res.end()).listen(0)
+
+  await waitForServer(server)
+
+  const peer = rawIdle(
+    server.address().port,
+    'GET / HTTP/1.1\r\nHost: localhost\r\nBad\x00Header: value\r\n\r\n'
+  )
+
+  await pause(200)
+
+  t.ok(peer.response.includes('400 Bad Request'), 'answered 400')
+  t.is(server.connections.size, 0, 'connection taken down without waiting on the peer')
+
+  peer.socket.destroy()
+
+  server.close(() => t.pass('server closed'))
+})
+
+test('an idle keep-alive connection is reclaimed', async (t) => {
+  t.plan(3)
+
+  const server = http.createServer({ headersTimeout: 100 }, (req, res) => res.end('ok')).listen(0)
+
+  await waitForServer(server)
+
+  const peer = rawIdle(server.address().port, 'GET / HTTP/1.1\r\nHost: localhost\r\n\r\n')
+
+  await pause(400)
+
+  t.ok(peer.response.includes('200 OK'), 'the request was answered')
+  t.is(server.connections.size, 0, 'connection taken down without waiting on the peer')
+
+  peer.socket.destroy()
+
+  server.close(() => t.pass('server closed'))
+})
+
+test('a connection the response gives up is taken down', async (t) => {
+  t.plan(3)
+
+  const server = http
+    .createServer({ headersTimeout: 0, requestTimeout: 0 }, (req, res) => res.end('ok'))
+    .listen(0)
+
+  await waitForServer(server)
+
+  const peer = rawIdle(
+    server.address().port,
+    'GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n'
+  )
+
+  await pause(200)
+
+  t.ok(peer.response.endsWith('\r\n\r\nok'), 'the whole response went out first')
+  t.is(server.connections.size, 0, 'connection taken down without waiting on the peer')
+
+  peer.socket.destroy()
+
+  server.close(() => t.pass('server closed'))
+})
+
+test('closing the server leaves an upgraded connection alone', async (t) => {
+  t.plan(4)
+
+  const server = http.createServer().listen(0)
+
+  server.on('upgrade', (req, socket) => {
+    socket
+      .on('error', () => {})
+      .on('data', () => socket.write(Buffer.from('pong')))
+      .write(
+        'HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n'
+      )
+  })
+
+  await waitForServer(server)
+
+  const socket = tcp.createConnection(server.address().port, 'localhost')
+
+  socket.on('error', () => {})
+
+  let received = ''
+
+  socket.on('data', (data) => {
+    received += data.toString()
+  })
+
+  socket.write(
+    Buffer.from(
+      'GET / HTTP/1.1\r\nHost: localhost\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n'
+    )
+  )
+
+  await pause(100)
+
+  t.ok(received.startsWith('HTTP/1.1 101'), 'the connection was handed over')
+
+  received = ''
+  socket.write(Buffer.from('ping'))
+
+  await pause(100)
+
+  t.is(received, 'pong', 'the tunnel carries traffic')
+
+  // The socket is no longer HTTP, so it is not the server's to reclaim.
+  server.close(() => t.pass('server closed'))
+
+  await pause(100)
+
+  received = ''
+  socket.write(Buffer.from('ping'))
+
+  await pause(100)
+
+  t.is(received, 'pong', 'the tunnel is left alone')
+
+  socket.destroy()
+})
+
+test('the request socket outlives the request body', async (t) => {
+  t.plan(4)
+
+  const server = http.createServer().listen(0)
+
+  server.on('request', async (req, res) => {
+    // The whole request arrived before the handler ever ran, but the socket is
+    // still who the consumer is talking to.
+    await pause(10)
+
+    t.ok(req.socket !== null, 'the socket is still there')
+    t.is(req.socket && typeof req.socket.remoteAddress, 'string', 'the peer can still be named')
+
+    res.end('ok')
+  })
+
+  await waitForServer(server)
+
+  const response = await rawBytes(
+    server.address().port,
+    'GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n'
+  )
+
+  t.ok(response.endsWith('ok'), 'the request was answered')
+
+  server.close(() => t.pass('server closed'))
+})
+
+test('a header value may carry obs-text', async (t) => {
+  t.plan(3)
+
+  const server = http.createServer().listen(0)
+
+  server.on('request', (req, res) => {
+    t.is(req.headers['x-name'], 'caf\xe9', 'received as one character per byte')
+
+    res.setHeader('x-name', req.headers['x-name'])
+    res.end('ok')
+  })
+
+  await waitForServer(server)
+
+  const response = await rawBytes(
+    server.address().port,
+    Buffer.concat([
+      Buffer.from('GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\nX-Name: caf'),
+      Buffer.from([0xe9]),
+      Buffer.from('\r\n\r\n')
+    ])
+  )
+
+  t.ok(response.includes('X-Name: '), 'sent back')
+
+  server.close(() => t.pass('server closed'))
+})
+
+test('a pipelined request is not answered after the connection is gone', async (t) => {
+  t.plan(2)
+
+  const server = http.createServer().listen(0)
+
+  const dispatched = []
+
+  server.on('request', async (req, res) => {
+    dispatched.push(req.url)
+
+    for await (const chunk of req) void chunk
+
+    await pause(200)
+
+    res.end('ok')
+  })
+
+  await waitForServer(server)
+
+  const socket = tcp.createConnection(server.address().port, 'localhost')
+
+  socket.on('error', () => {})
+
+  socket.write(
+    Buffer.from(
+      'POST /1 HTTP/1.1\r\nHost: localhost\r\nContent-Length: 2\r\n\r\nhi' +
+        'POST /2 HTTP/1.1\r\nHost: localhost\r\nContent-Length: 2\r\n\r\nhi'
+    )
+  )
+
+  await pause(100)
+
+  socket.destroy()
+
+  await pause(400)
+
+  t.alike(dispatched, ['/1'], 'the second request was never dispatched')
+
+  server.close(() => t.pass('server closed'))
+})
+
+test('a slow response is not cut off by the agent timeout', async (t) => {
+  t.plan(3)
+
+  const server = http
+    .createServer(async (req, res) => {
+      // Longer than the timeout, which belongs to whoever is using the socket
+      // rather than to the agent.
+      await pause(300)
+
+      res.end('response')
+    })
+    .listen(0)
+
+  await waitForServer(server)
+
+  const agent = new http.Agent({ port: server.address().port, timeout: 100 })
+
+  const chunks = []
+
+  let timedOut = false
+  let ended = false
+
+  const req = http.request({ agent }, (res) => {
+    res
+      .on('data', (data) => chunks.push(data))
+      .on('end', () => {
+        ended = true
+      })
+  })
+
+  req.on('timeout', () => {
+    timedOut = true
+  })
+
+  req.end()
+
+  await waitFor(req, 'close')
+
+  t.ok(timedOut, 'the timeout was reported to the request')
+  t.ok(ended, 'the response still arrived')
+  t.alike(Buffer.concat(chunks), Buffer.from('response'), 'body intact')
+
+  agent.destroy()
+
+  server.close()
+})
+
+test('losing the socket under an unanswered request is reported', async (t) => {
+  t.plan(2)
+
+  const server = http
+    .createServer(async (req, res) => {
+      await pause(1000)
+
+      res.end()
+    })
+    .listen(0)
+
+  await waitForServer(server)
+
+  const agent = new http.Agent({ port: server.address().port })
+
+  const events = []
+
+  const req = http.request({ agent }, () => events.push('response'))
+
+  req.on('error', (err) => events.push(err.code))
+
+  req.end()
+
+  await pause(100)
+
+  agent.destroy()
+
+  await waitFor(req, 'close')
+
+  t.alike(events, ['CONNECTION_LOST'], 'the request was told that it failed')
+
+  await closeServer(server)
+
+  t.pass('server closed')
+})
+
+test('a connection is only pooled with one that was made the same way', (t) => {
+  // Laid out as Node.js lays it out, since an override has to agree with it.
+  const agent = new http.Agent()
+
+  t.is(agent.getName({}), 'localhost::')
+  t.is(agent.getName({ host: 'example.org', port: 80 }), 'example.org:80:')
+  t.is(agent.getName({ host: 'example.org', port: 80, family: 6 }), 'example.org:80::6')
+  t.is(
+    agent.getName({ host: 'example.org', port: 80, localAddress: '127.0.0.1' }),
+    'example.org:80:127.0.0.1'
+  )
+  t.is(agent.getName({ socketPath: '/tmp/http.sock' }), 'localhost:::/tmp/http.sock')
+  t.is(
+    agent.getName({
+      host: 'example.org',
+      port: 80,
+      localAddress: '127.0.0.1',
+      family: 4,
+      socketPath: '/tmp/http.sock'
+    }),
+    'example.org:80:127.0.0.1:4:/tmp/http.sock'
+  )
+})
+
+test('a message that cannot be framed reports it rather than throwing', async (t) => {
+  t.plan(7)
+
+  const server = http.createServer().listen(0)
+
+  const seen = []
+
+  server.on('request', (req, res) => {
+    res.on('error', (err) => seen.push(req.url + ':' + err.code))
+
+    res.setHeader('transfer-encoding', 'gzip')
+
+    // Never thrown from underneath the caller, as Node.js never throws one out
+    // of `write` or `end` either.
+    try {
+      if (req.url === '/write') {
+        // A message that has failed is not going to take any more of the body.
+        t.is(res.write('body'), false, 'write refused the body')
+      } else if (req.url === '/end') {
+        res.end('body')
+
+        t.pass('end did not throw')
+      } else {
+        res.end()
+
+        t.pass('empty end did not throw')
+      }
+    } catch (err) {
+      t.fail(req.url + ' threw ' + err.code)
+    }
+  })
+
+  await waitForServer(server)
+
+  for (const path of ['/write', '/end', '/empty']) {
+    const peer = rawIdle(server.address().port, `GET ${path} HTTP/1.1\r\nHost: localhost\r\n\r\n`)
+
+    await pause(100)
+
+    t.is(peer.response, '', 'nothing went out for ' + path)
+
+    peer.socket.destroy()
+  }
+
+  t.alike(
+    seen,
+    [
+      '/write:INVALID_TRANSFER_ENCODING',
+      '/end:INVALID_TRANSFER_ENCODING',
+      '/empty:INVALID_TRANSFER_ENCODING'
+    ],
+    'each failure was reported on its response'
+  )
+
+  server.close()
+})
+
+test('a body that was never asked for gives up the connection', async (t) => {
+  t.plan(3)
+
+  const server = http.createServer().listen(0)
+
+  // Answered without ever telling the client to send its body, which it may
+  // therefore still be holding on to.
+  server.on('checkContinue', (req, res) => {
+    res.writeHead(400)
+    res.end('nope')
+  })
+
+  await waitForServer(server)
+
+  const peer = rawIdle(
+    server.address().port,
+    'POST / HTTP/1.1\r\nHost: localhost\r\nExpect: 100-continue\r\nContent-Length: 5\r\n\r\n'
+  )
+
+  await pause(200)
+
+  t.ok(peer.response.includes('400 Bad Request'), 'answered 400')
+  t.ok(peer.response.includes('Connection: close'), 'the connection is not reused')
+
+  peer.socket.destroy()
+
+  server.close(() => t.pass('server closed'))
+})
+
+test('a body that was asked for keeps the connection', async (t) => {
+  t.plan(3)
+
+  const server = http.createServer().listen(0)
+
+  server.on('checkContinue', (req, res) => {
+    res.writeContinue()
+
+    res.writeHead(400)
+    res.end('nope')
+  })
+
+  await waitForServer(server)
+
+  const response = await rawUntil(
+    server.address().port,
+    'POST / HTTP/1.1\r\nHost: localhost\r\nExpect: 100-continue\r\nContent-Length: 0\r\n\r\n',
+    'nope'
+  )
+
+  t.ok(response.startsWith('HTTP/1.1 100 Continue\r\n\r\n'), 'the body was asked for')
+  t.absent(response.includes('Connection: close'), 'the connection is kept')
+
+  server.close(() => t.pass('server closed'))
+})
+
+test('an expectation nothing understands is refused', async (t) => {
+  t.plan(3)
+
+  const server = http.createServer().listen(0)
+
+  server.on('request', () => t.fail('the request should not be handled'))
+
+  await waitForServer(server)
+
+  const peer = rawIdle(
+    server.address().port,
+    'POST / HTTP/1.1\r\nHost: localhost\r\nExpect: the-impossible\r\nContent-Length: 0\r\n\r\n'
+  )
+
+  await pause(200)
+
+  t.ok(peer.response.includes('417 Expectation Failed'), 'answered 417')
+  t.pass('the request was not handled')
+
+  peer.socket.destroy()
+
+  server.close(() => t.pass('server closed'))
+})
+
+test('an expectation can be answered by a checkExpectation handler', async (t) => {
+  t.plan(3)
+
+  const server = http.createServer().listen(0)
+
+  server.on('request', () => t.fail('the request should not be handled'))
+
+  server.on('checkExpectation', (req, res) => {
+    t.is(req.headers.expect, 'the-impossible', 'the expectation is readable')
+
+    res.end('handled')
+  })
+
+  await waitForServer(server)
+
+  const peer = rawIdle(
+    server.address().port,
+    'POST / HTTP/1.1\r\nHost: localhost\r\nExpect: the-impossible\r\nContent-Length: 0\r\n\r\n'
+  )
+
+  await pause(200)
+
+  t.ok(peer.response.includes('200 OK'), 'answered by the handler')
+
+  peer.socket.destroy()
+
+  server.close(() => t.pass('server closed'))
+})
+
+test('an expectation from an HTTP/1.0 client is left alone', async (t) => {
+  t.plan(3)
+
+  const server = http.createServer().listen(0)
+
+  // A 1xx is no use to an HTTP/1.0 client, so there is nothing to answer and
+  // the request is handled as any other.
+  server.on('request', (req, res) => {
+    t.pass('the request was handled')
+
+    res.end('ok')
+  })
+
+  await waitForServer(server)
+
+  const response = await rawBytes(
+    server.address().port,
+    'POST / HTTP/1.0\r\nHost: localhost\r\nExpect: the-impossible\r\nContent-Length: 0\r\n\r\n'
+  )
+
+  t.ok(response.includes('200 OK'), 'answered normally')
+
+  server.close(() => t.pass('server closed'))
+})
+
 async function halfOpenServer(opts = {}) {
   const { end = false } = opts
 
@@ -4436,6 +4963,26 @@ function rawBytes(port, request) {
 
     socket.write(Buffer.from(request))
   })
+}
+
+// Sends raw bytes and leaves the connection open afterwards, so that what this
+// side does with a socket the peer will not close of its own accord can be
+// asserted on. The caller closes it when it is done.
+function rawIdle(port, request) {
+  const socket = tcp.createConnection(port, 'localhost')
+
+  const chunks = []
+
+  socket.on('error', () => {}).on('data', (data) => chunks.push(data))
+
+  socket.write(Buffer.from(request))
+
+  return {
+    socket,
+    get response() {
+      return Buffer.concat(chunks).toString()
+    }
+  }
 }
 
 // Sends raw bytes and collects whatever comes back until the given marker has
