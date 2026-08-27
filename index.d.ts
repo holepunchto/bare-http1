@@ -20,15 +20,26 @@ export {
   HTTPError as errors
 }
 
+export type HTTPVersion = '1.0' | '1.1'
+
+export interface HTTPInformationalResponse {
+  httpVersion: HTTPVersion
+  statusCode: HTTPStatusCode
+  statusMessage: HTTPStatusMessage
+  headers: Record<string, string | number>
+}
+
 export const METHODS: HTTPMethod[]
 export const STATUS_CODES: typeof constants.status
 
 export interface HTTPIncomingMessageEvents extends ReadableEvents {
+  aborted: []
   timeout: []
 }
 
 export interface HTTPIncomingMessageOptions {
   headers?: Record<string, string | number>
+  httpVersion?: HTTPVersion
   method?: HTTPMethod
   url?: string
   statusCode?: HTTPStatusCode
@@ -45,7 +56,7 @@ interface HTTPIncomingMessage<
   url: string
   statusCode: HTTPStatusCode
   statusMessage: HTTPStatusMessage
-  readonly httpVersion: '1.1'
+  readonly httpVersion: HTTPVersion
 
   getHeader(name: string): string | number | undefined
   getHeaders(): Record<string, string | number>
@@ -127,7 +138,9 @@ export { type HTTPAgent, HTTPAgent as Agent }
 
 export interface HTTPServerEvents extends TCPServerEvents {
   request: [req: HTTPIncomingMessage, res: HTTPServerResponse]
+  checkContinue: [req: HTTPIncomingMessage, res: HTTPServerResponse]
   upgrade: [req: HTTPIncomingMessage, socket: TCPSocket, head: Buffer]
+  clientError: [err: HTTPError, socket: TCPSocket]
   timeout: [socket: TCPSocket]
 }
 
@@ -135,6 +148,9 @@ interface HTTPServer<M extends HTTPServerEvents = HTTPServerEvents> extends TCPS
   readonly timeout: number | undefined
 
   setTimeout(ms: number, ontimeout?: () => void): this
+
+  closeIdleConnections(): void
+  closeAllConnections(): void
 }
 
 declare class HTTPServer<M extends HTTPServerEvents = HTTPServerEvents> extends TCPServer<M> {
@@ -160,6 +176,8 @@ interface HTTPServerResponse extends HTTPOutgoingMessage {
   ): void
 
   writeHead(statusCode: HTTPStatusCode, headers?: Record<string, string | number>): void
+
+  writeContinue(): void
 }
 
 declare class HTTPServerResponse extends HTTPOutgoingMessage {
@@ -191,6 +209,7 @@ export { type HTTPServerConnection, HTTPServerConnection as ServerConnection }
 
 export interface HTTPClientRequestEvents extends HTTPOutgoingMessageEvents {
   response: [res: HTTPIncomingMessage]
+  information: [info: HTTPInformationalResponse]
   upgrade: [res: HTTPIncomingMessage, socket: TCPSocket, head: Buffer]
 }
 

@@ -114,6 +114,78 @@ test('destroy request', async (t) => {
   server.close(() => t.pass('server closed'))
 })
 
+test('request finishes once its body has been sent', async (t) => {
+  t.plan(4)
+
+  const server = http
+    .createServer((req, res) => {
+      req.resume().on('end', () => setTimeout(() => res.end('response'), 50))
+    })
+    .listen(0)
+
+  await waitForServer(server)
+
+  const agent = new http.Agent({ port: server.address().port })
+
+  const req = http.request({ agent, method: 'POST' }, (res) => res.resume())
+
+  // Finishing is the body being sent, not the exchange being over: the request
+  // is still there to be answered.
+  req.on('finish', () => {
+    t.pass('request finished')
+    t.absent(req.destroyed, 'request still open for the response')
+  })
+
+  req.on('close', () => t.pass('request closed once answered'))
+
+  req.end('body')
+
+  await waitFor(req, 'close')
+
+  agent.destroy()
+
+  await closeServer(server)
+
+  t.pass('server closed')
+})
+
+test('destroy request once its body has been sent', async (t) => {
+  t.plan(3)
+
+  const server = http
+    .createServer((req, res) => {
+      req.resume().on('end', () => setTimeout(() => res.end('response'), 200))
+    })
+    .listen(0)
+
+  await waitForServer(server)
+
+  const agent = new http.Agent({ port: server.address().port })
+
+  const req = http.request({ agent, method: 'POST' }, () => t.fail('response should not arrive'))
+
+  const socket = req.socket
+
+  // Giving up while waiting for the response has to take the connection with
+  // it, which is why the request outlives its own body.
+  req.on('finish', () => req.destroy())
+
+  req.on('close', () => {
+    t.pass('request closed')
+    t.ok(socket.destroying, 'connection torn down')
+  })
+
+  req.end('body')
+
+  await waitFor(req, 'close')
+
+  agent.destroy()
+
+  await closeServer(server)
+
+  t.pass('server closed')
+})
+
 test('destroy response', async (t) => {
   t.plan(5)
 
@@ -241,6 +313,112 @@ test('destroy partial POST request', async (t) => {
   server.close()
 })
 
+test('connection lost while the response body is arriving', async (t) => {
+  t.plan(2)
+
+  const sub = t.test()
+  sub.plan(4)
+
+  // Promises a hundred bytes, sends seven, then goes away.
+  const server = await rawServer('HTTP/1.1 200 OK\r\nContent-Length: 100\r\n\r\npartial', {
+    destroy: true
+  })
+
+  const agent = new http.Agent({ port: server.address().port })
+
+  const req = http.request({ agent }, (res) => {
+    res
+      .on('data', (data) => sub.alike(data, Buffer.from('partial'), 'partial body delivered'))
+      // A truncated body must not look like a clean end, and it must not leave
+      // the consumer waiting for one either.
+      .on('aborted', () => sub.pass('response aborted'))
+      .on('error', (err) => sub.is(err.code, 'CONNECTION_LOST', 'response failed'))
+      .on('close', () => sub.pass('response closed'))
+  })
+
+  // The request was sent in full and answered, so it is not the half that
+  // failed.
+  req.on('error', () => t.fail('request should not fail'))
+
+  req.end()
+
+  await sub
+
+  agent.destroy()
+
+  await closeServer(server)
+
+  t.pass('server closed')
+})
+
+test('connection lost before the response arrives', async (t) => {
+  t.plan(3)
+
+  // Takes the request and goes away without answering it.
+  const server = tcp.createServer((socket) => {
+    socket.on('error', () => {})
+
+    socket.once('data', () => socket.end())
+  })
+
+  server.listen(0)
+
+  await waitForServer(server)
+
+  const agent = new http.Agent({ port: server.address().port })
+
+  const req = http.request({ agent }, () => t.fail('no response expected'))
+
+  // Nothing was answered, so the request is the half left outstanding.
+  req.on('error', (err) => t.is(err.code, 'CONNECTION_LOST', 'request failed'))
+  req.on('close', () => t.pass('request closed'))
+
+  req.end()
+
+  await waitFor(req, 'close')
+
+  agent.destroy()
+
+  await closeServer(server)
+
+  t.pass('server closed')
+})
+
+test('connection lost after the response body has arrived', async (t) => {
+  t.plan(2)
+
+  const sub = t.test()
+  sub.plan(2)
+
+  const server = await rawServer('HTTP/1.1 200 OK\r\nContent-Length: 8\r\n\r\nresponse', {
+    destroy: true
+  })
+
+  const agent = new http.Agent({ port: server.address().port })
+
+  const chunks = []
+
+  http
+    .request({ agent }, (res) => {
+      res
+        .on('data', (data) => chunks.push(data))
+        // The body is all there, so losing the connection afterwards is not a
+        // failure of the response.
+        .on('error', () => sub.fail('response should not fail'))
+        .on('end', () => sub.alike(Buffer.concat(chunks), Buffer.from('response'), 'body intact'))
+        .on('close', () => sub.pass('response closed'))
+    })
+    .end()
+
+  await sub
+
+  agent.destroy()
+
+  await closeServer(server)
+
+  t.pass('server closed')
+})
+
 test('write head', async (t) => {
   t.plan(7)
 
@@ -304,6 +482,83 @@ test('write head with headers', async (t) => {
   server.close(() => t.pass('server closed'))
 })
 
+test('write head normalises header casing', async (t) => {
+  t.plan(3)
+
+  const server = http
+    .createServer((req, res) => {
+      res.setHeader('content-length', '2')
+      // Sending both would be a framing error, so the second has to replace the
+      // first rather than sit alongside it.
+      res.writeHead(200, { 'Content-Length': '2' })
+      res.end('ab')
+    })
+    .listen(0)
+
+  await waitForServer(server)
+
+  const raw = await rawRequest(
+    server.address().port,
+    'GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n'
+  )
+
+  t.is(raw.match(/^content-length:/gim).length, 1, 'content length sent once')
+  t.ok(raw.includes('Content-Length: 2\r\n'), 'content length is the one that was set')
+  t.ok(raw.endsWith('\r\n\r\nab'), 'body follows the headers')
+
+  await closeServer(server)
+})
+
+test('headers cannot be changed once they have been sent', async (t) => {
+  t.plan(3)
+
+  const sub = t.test()
+  sub.plan(4)
+
+  const server = http
+    .createServer((req, res) => {
+      sub.is(res.headersSent, false, 'headers not sent before writing')
+
+      res.write('chunk')
+
+      // The headers went out with the write, so anything that would change them
+      // is too late and has to say so rather than silently take effect.
+      sub.is(res.headersSent, true, 'headers sent once written')
+      sub.exception(() => res.setHeader('X-Late', '1'), /HEADERS_SENT/, 'setHeader throws')
+      sub.exception(() => res.writeHead(500), /HEADERS_SENT/, 'writeHead throws')
+
+      res.end()
+    })
+    .listen(0)
+
+  await waitForServer(server)
+
+  const raw = await rawRequest(
+    server.address().port,
+    'GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n'
+  )
+
+  await sub
+
+  t.ok(raw.startsWith('HTTP/1.1 200 OK\r\n'), 'status is the one that was sent')
+  t.is(raw.includes('X-Late'), false, 'late header not sent')
+
+  await closeServer(server)
+})
+
+test('request headers are readable whatever casing they were given in', (t) => {
+  t.plan(4)
+
+  const req = http.request({ agent: false, headers: { 'X-Custom': 'value' } })
+
+  t.is(req.getHeader('x-custom'), 'value', 'readable in lower case')
+  t.is(req.getHeader('X-Custom'), 'value', 'readable in the original casing')
+  t.ok(req.hasHeader('X-Custom'), 'reported as present')
+  t.alike(Object.keys(req.getHeaders()).sort(), ['host', 'x-custom'], 'stored in lower case')
+
+  req.destroy()
+})
+
 test('chunked', async (t) => {
   t.plan(7)
 
@@ -353,6 +608,35 @@ test('chunked', async (t) => {
   t.alike(Buffer.concat(req.response.chunks), Buffer.from('response part 1 + response part 2'))
 
   server.close(() => t.pass('server closed'))
+})
+
+test('chunked request with trailer fields', async (t) => {
+  t.plan(2)
+
+  const server = http
+    .createServer((req, res) => {
+      const chunks = []
+
+      req
+        .on('data', (data) => chunks.push(data))
+        .on('end', () => res.end(Buffer.concat(chunks)))
+        .resume()
+    })
+    .listen(0)
+
+  await waitForServer(server)
+
+  const raw = await rawRequest(
+    server.address().port,
+    'POST / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n' +
+      'Transfer-Encoding: chunked\r\n\r\n' +
+      '5\r\nhello\r\n0\r\nX-Trailer: value\r\n\r\n'
+  )
+
+  t.ok(raw.startsWith('HTTP/1.1 200 OK\r\n'), 'request accepted')
+  t.ok(raw.endsWith('\r\n\r\nhello'), 'body received')
+
+  await closeServer(server)
 })
 
 test('large request and response body', async (t) => {
@@ -409,6 +693,305 @@ test('large request and response body', async (t) => {
   )
 
   server.close(() => t.pass('server closed'))
+})
+
+test('request body is framed on a method that carries none by default', async (t) => {
+  t.plan(3)
+
+  const sub = t.test()
+  sub.plan(1)
+
+  const server = http
+    .createServer((req, res) => {
+      const chunks = []
+
+      req
+        .on('data', (data) => chunks.push(data))
+        // An unframed body is not a body at all: the peer would read it as the
+        // start of another request.
+        .on('end', () => sub.alike(Buffer.concat(chunks), Buffer.from('body'), 'body received'))
+        .resume()
+
+      req.on('end', () => res.end('ok'))
+    })
+    .listen(0)
+
+  await waitForServer(server)
+
+  const agent = new http.Agent({ port: server.address().port })
+
+  const result = await request({ agent, method: 'GET' }, (client) => client.end('body'))
+
+  await sub
+
+  t.is(result.response.statusCode, 200, 'request understood')
+
+  agent.destroy()
+
+  await closeServer(server)
+
+  t.pass('server closed')
+})
+
+test('request without a body is not framed as chunked', async (t) => {
+  t.plan(3)
+
+  const sub = t.test()
+  sub.plan(2)
+
+  const server = http
+    .createServer((req, res) => {
+      sub.is(req.headers['transfer-encoding'], undefined, 'not chunked')
+      sub.is(req.headers['content-length'], undefined, 'no content length')
+
+      res.end()
+    })
+    .listen(0)
+
+  await waitForServer(server)
+
+  const agent = new http.Agent({ port: server.address().port })
+
+  const result = await request({ agent })
+
+  await sub
+
+  t.is(result.response.statusCode, 200, 'request understood')
+
+  agent.destroy()
+
+  await closeServer(server)
+
+  t.pass('server closed')
+})
+
+test('response to HEAD has no body', async (t) => {
+  t.plan(3)
+
+  const sub = t.test()
+  sub.plan(3)
+
+  // A HEAD response carries the headers a GET would, content length included,
+  // but no body. Waiting for one would hang the exchange.
+  const server = await rawServer('HTTP/1.1 200 OK\r\nContent-Length: 100\r\n\r\n')
+
+  const agent = new http.Agent({ port: server.address().port })
+
+  http
+    .request({ agent, method: 'HEAD' }, (res) => {
+      sub.is(res.statusCode, 200, 'status received')
+      sub.is(res.getHeader('content-length'), '100', 'length reported')
+
+      res
+        .on('data', () => sub.fail('no body expected'))
+        .on('end', () => sub.pass('response ended'))
+        .resume()
+    })
+    .end()
+
+  await sub
+
+  t.pass('response completed without a body')
+
+  agent.destroy()
+
+  await closeServer(server)
+
+  t.pass('server closed')
+})
+
+test('response to HEAD does not consume the response after it', async (t) => {
+  t.plan(3)
+
+  const sub = t.test()
+  sub.plan(3)
+
+  const server = http.createServer((req, res) => res.end('response')).listen(0)
+
+  await waitForServer(server)
+
+  const agent = new http.Agent({ port: server.address().port, keepAlive: true })
+
+  const head = http.request({ agent, method: 'HEAD' }, (res) => {
+    sub.is(res.getHeader('content-length'), '8', 'length a GET would have returned')
+
+    res
+      .on('data', () => sub.fail('no body expected'))
+      .on('end', () => sub.pass('head response ended'))
+      .resume()
+  })
+
+  const socket = head.socket
+
+  head.on('close', () => {
+    setImmediate(() => {
+      // On the same socket, so a HEAD response that was read as having a body
+      // would have swallowed this one whole.
+      const get = http
+        .request({ agent }, (res) => {
+          t.is(get.socket, socket, 'socket reused')
+
+          res.on('data', (data) => sub.alike(data, Buffer.from('response'), 'body received'))
+        })
+        .on('close', () => agent.destroy())
+
+      get.end()
+    })
+  })
+
+  head.end()
+
+  await sub
+
+  await closeServer(server)
+
+  t.pass('server closed')
+})
+
+test('response delimited by the connection closing', async (t) => {
+  t.plan(2)
+
+  const sub = t.test()
+  sub.plan(2)
+
+  // Neither a content length nor a transfer encoding, so the body runs until the
+  // connection closes.
+  const server = await rawServer('HTTP/1.1 200 OK\r\n\r\nresponse', { end: true })
+
+  const agent = new http.Agent({ port: server.address().port })
+
+  const chunks = []
+
+  http
+    .request({ agent }, (res) => {
+      res
+        .on('data', (data) => chunks.push(data))
+        .on('error', () => sub.fail('the close ends the body rather than failing it'))
+        .on('end', () => sub.alike(Buffer.concat(chunks), Buffer.from('response'), 'body received'))
+        .on('close', () => sub.pass('response closed'))
+    })
+    .end()
+
+  await sub
+
+  agent.destroy()
+
+  await closeServer(server)
+
+  t.pass('server closed')
+})
+
+test('response with a status that carries no body', async (t) => {
+  t.plan(3)
+
+  const sub = t.test()
+  sub.plan(2)
+
+  // 304 is allowed to carry the content length of the body it is standing in
+  // for, without the body itself.
+  const server = await rawServer('HTTP/1.1 304 Not Modified\r\nContent-Length: 100\r\n\r\n')
+
+  const agent = new http.Agent({ port: server.address().port })
+
+  http
+    .request({ agent }, (res) => {
+      sub.is(res.statusCode, 304, 'status received')
+
+      res
+        .on('data', () => sub.fail('no body expected'))
+        .on('end', () => sub.pass('response ended'))
+        .resume()
+    })
+    .end()
+
+  await sub
+
+  t.pass('response completed without a body')
+
+  agent.destroy()
+
+  await closeServer(server)
+
+  t.pass('server closed')
+})
+
+test('HTTP/1.0 request', async (t) => {
+  t.plan(4)
+
+  const sub = t.test()
+  sub.plan(2)
+
+  const server = http
+    .createServer((req, res) => {
+      sub.is(req.httpVersion, '1.0', 'version reported')
+      sub.is(req.headers.connection, undefined, 'no connection header')
+
+      // Written in two goes, so the body length is not known up front.
+      res.write('hello ')
+      res.end('world')
+    })
+    .listen(0)
+
+  await waitForServer(server)
+
+  const raw = await rawRequest(server.address().port, 'GET / HTTP/1.0\r\n\r\n')
+
+  await sub
+
+  // HTTP/1.0 has no chunked transfer encoding, so a body of unknown length can
+  // only be delimited by closing the connection.
+  t.is(raw.includes('Transfer-Encoding'), false, 'not chunked')
+  t.ok(raw.includes('Connection: close\r\n'), 'connection close announced')
+  t.ok(raw.endsWith('\r\n\r\nhello world'), 'body delimited by the close')
+
+  await closeServer(server)
+})
+
+test('connection close is honoured whatever its casing', async (t) => {
+  t.plan(2)
+
+  const server = http.createServer((req, res) => res.end('response')).listen(0)
+
+  await waitForServer(server)
+
+  // rawRequest only resolves once the peer closes, so the request completing at
+  // all is the assertion that the token was understood.
+  const raw = await rawRequest(
+    server.address().port,
+    'GET / HTTP/1.1\r\nHost: localhost\r\nConnection: Close\r\n\r\n'
+  )
+
+  t.ok(raw.endsWith('\r\n\r\nresponse'), 'response received')
+  t.ok(raw.includes('Connection: close\r\n'), 'connection close announced')
+
+  await closeServer(server)
+})
+
+test('pipelined requests are answered in order', async (t) => {
+  t.plan(4)
+
+  const server = http
+    .createServer((req, res) => {
+      // The first request is answered slowest, so responses that are not held
+      // back would go out the wrong way round and be read as each other's.
+      setTimeout(() => res.end(req.url), req.url === '/first' ? 100 : 0)
+    })
+    .listen(0)
+
+  await waitForServer(server)
+
+  const raw = await rawRequest(
+    server.address().port,
+    'GET /first HTTP/1.1\r\nHost: localhost\r\n\r\n' +
+      'GET /second HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n'
+  )
+
+  t.ok(raw.includes('/first'), 'first request answered')
+  t.ok(raw.includes('/second'), 'second request answered')
+  t.ok(raw.indexOf('/first') < raw.indexOf('/second'), 'answered in request order')
+  t.is(raw.split('HTTP/1.1 200 OK').length - 1, 2, 'one response each')
+
+  await closeServer(server)
 })
 
 test('protocol negotiation', async (t) => {
@@ -504,6 +1087,109 @@ test('close connection if missing upgrade handler', async (t) => {
   await sub
 
   server.close()
+})
+
+test('expect 100-continue is answered automatically', async (t) => {
+  t.plan(3)
+
+  const sub = t.test()
+  sub.plan(1)
+
+  const server = http
+    .createServer((req, res) => {
+      const chunks = []
+
+      req
+        .on('data', (data) => chunks.push(data))
+        .on('end', () => {
+          sub.alike(Buffer.concat(chunks), Buffer.from('hello'), 'body received')
+          res.end('done')
+        })
+        .resume()
+    })
+    .listen(0)
+
+  await waitForServer(server)
+
+  // A client that asks whether to send its body will not send it until it has
+  // been told, so an unanswered expectation deadlocks the exchange.
+  const raw = await rawRequest(
+    server.address().port,
+    'POST / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n' +
+      'Expect: 100-continue\r\nContent-Length: 5\r\n\r\n',
+    { on: '100 Continue', send: 'hello' }
+  )
+
+  await sub
+
+  t.ok(raw.startsWith('HTTP/1.1 100 Continue\r\n\r\n'), 'continue sent first')
+  t.ok(raw.endsWith('\r\n\r\ndone'), 'response follows')
+
+  await closeServer(server)
+})
+
+test('expect 100-continue is answered by a checkContinue handler', async (t) => {
+  t.plan(2)
+
+  const server = http.createServer()
+
+  // A handler takes the decision over, and may turn the request down before its
+  // body is ever sent.
+  server.on('checkContinue', (req, res) => {
+    res.statusCode = 417
+    res.end('nope')
+  })
+
+  server.listen(0)
+
+  await waitForServer(server)
+
+  const raw = await rawRequest(
+    server.address().port,
+    'POST / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n' +
+      'Expect: 100-continue\r\nContent-Length: 5\r\n\r\n'
+  )
+
+  t.is(raw.includes('100 Continue'), false, 'continue not sent')
+  t.ok(raw.startsWith('HTTP/1.1 417 Expectation Failed\r\n'), 'request turned down')
+
+  await closeServer(server)
+})
+
+test('interim response is reported separately from the response', async (t) => {
+  t.plan(3)
+
+  const sub = t.test()
+  sub.plan(3)
+
+  // An interim 1xx is not the answer to the request: the real response follows,
+  // and the request has to stay open for it.
+  const server = await rawServer(
+    'HTTP/1.1 103 Early Hints\r\nLink: </style.css>\r\n\r\n' +
+      'HTTP/1.1 200 OK\r\nContent-Length: 8\r\n\r\nresponse'
+  )
+
+  const agent = new http.Agent({ port: server.address().port })
+
+  const req = http.request({ agent }, (res) => {
+    sub.is(res.statusCode, 200, 'final status')
+
+    res.on('data', (data) => sub.alike(data, Buffer.from('response'), 'body received'))
+  })
+
+  req.on('information', (info) => sub.is(info.statusCode, 103, 'interim status'))
+
+  req.end()
+
+  await sub
+
+  t.pass('both responses reported')
+
+  agent.destroy()
+
+  await closeServer(server)
+
+  t.pass('server closed')
 })
 
 test('GET request', async (t) => {
@@ -799,46 +1485,8 @@ test('socket reuse, destroy first response', async (t) => {
   server.close(() => t.pass('server closed'))
 })
 
-test('socket is not pooled while it is being destroyed', async (t) => {
+test('socket reuse, destroy pooled socket', async (t) => {
   t.plan(3)
-
-  const server = http.createServer((req, res) => res.end('response')).listen(0)
-
-  await waitForServer(server)
-
-  const agent = new http.Agent({ port: server.address().port, keepAlive: true })
-
-  // The socket is captured up front, as the request lets go of it when the
-  // response ends.
-  let socket
-
-  const req = http.request({ agent }, (res) => {
-    socket = req.socket
-
-    res.destroy()
-  })
-
-  const closed = new Promise((resolve) => req.on('close', resolve))
-
-  req.end()
-
-  await closed
-
-  // Destroying the response destroys the socket, which may not emit `close`
-  // until several ticks later, so the socket must not be handed back out in
-  // the meantime.
-  t.is(socket.destroying, true, 'socket is being destroyed')
-  t.is([...agent.freeSockets].length, 0, 'socket not pooled')
-
-  agent.destroy()
-
-  await closeServer(server)
-
-  t.pass('server closed')
-})
-
-test('pooled socket is not reused once it is being destroyed', async (t) => {
-  t.plan(5)
 
   const server = http.createServer((req, res) => res.end('response')).listen(0)
 
@@ -854,13 +1502,9 @@ test('pooled socket is not reused once it is being destroyed', async (t) => {
 
   await new Promise((resolve) => first.on('close', resolve))
 
-  t.is([...agent.freeSockets].length, 1, 'socket pooled')
-
-  // The socket is destroyed and reused within the same tick, so it is still
-  // pooled by the time the second request asks for a socket.
+  // Destroyed and replaced within the same tick, so the socket has not had a
+  // chance to close and is still there to be picked up.
   socket.destroy()
-
-  t.is([...agent.freeSockets].length, 1, 'socket still pooled')
 
   const sub = t.test('second request')
   sub.plan(1)
@@ -871,6 +1515,48 @@ test('pooled socket is not reused once it is being destroyed', async (t) => {
 
   // Asserted before awaiting the response, as reusing the socket leaves the
   // second request without one.
+  t.not(second.socket, socket, 'socket not reused')
+
+  second.on('close', () => agent.destroy()).end()
+
+  await sub
+
+  await closeServer(server)
+
+  t.pass('server closed')
+})
+
+test('socket reuse, server closes the connection', async (t) => {
+  t.plan(3)
+
+  const server = http
+    .createServer((req, res) => {
+      // The peer is bowing out, so its socket must not be picked up for the
+      // next request however keen the agent is to keep it.
+      res.setHeader('Connection', 'close')
+      res.end('response')
+    })
+    .listen(0)
+
+  await waitForServer(server)
+
+  const agent = new http.Agent({ port: server.address().port, keepAlive: true })
+
+  const first = http.request({ agent }, (res) => res.resume())
+
+  const socket = first.socket
+
+  first.end()
+
+  await new Promise((resolve) => first.on('close', resolve))
+
+  const sub = t.test('second request')
+  sub.plan(1)
+
+  const second = http.request({ agent }, (res) => {
+    res.on('data', (data) => sub.alike(data, Buffer.from('response')))
+  })
+
   t.not(second.socket, socket, 'socket not reused')
 
   second.on('close', () => agent.destroy()).end()
@@ -905,6 +1591,132 @@ test('socket reuse, socket closes after timeout', async (t) => {
   await sub
 
   server.close(() => t.pass('server closed'))
+})
+
+test('close server while a response is in flight', async (t) => {
+  t.plan(4)
+
+  const server = http.createServer((req, res) => {
+    // Closed from inside the handler, which must not cut short the response the
+    // handler is about to write.
+    server.close(() => t.pass('server closed'))
+
+    setTimeout(() => res.end('late response'), 100)
+  })
+
+  server.listen(0)
+
+  await waitForServer(server)
+
+  const agent = new http.Agent({ port: server.address().port })
+
+  const result = await request({ agent })
+
+  t.is(result.error, null, 'no error')
+  t.is(result.response.statusCode, 200, 'response received')
+  t.alike(Buffer.concat(result.response.chunks), Buffer.from('late response'), 'body intact')
+
+  agent.destroy()
+})
+
+test('close server while a response is in flight, closed from outside', async (t) => {
+  t.plan(4)
+
+  const server = http.createServer((req, res) => {
+    setTimeout(() => res.end('late response'), 200)
+  })
+
+  server.listen(0)
+
+  await waitForServer(server)
+
+  const agent = new http.Agent({ port: server.address().port })
+
+  const result = request({ agent })
+
+  // The usual shutdown: close while requests are still being served.
+  setTimeout(() => server.close(() => t.pass('server closed')), 50)
+
+  const { error, response } = await result
+
+  t.is(error, null, 'no error')
+  t.is(response.statusCode, 200, 'response received')
+  t.alike(Buffer.concat(response.chunks), Buffer.from('late response'), 'body intact')
+
+  agent.destroy()
+})
+
+test('close server with a request that is never answered', async (t) => {
+  t.plan(4)
+
+  const sub = t.test()
+  sub.plan(1)
+
+  // Taken but never answered, so the exchange never finishes on its own.
+  const server = http.createServer(() => sub.pass('request received')).listen(0)
+
+  await waitForServer(server)
+
+  const agent = new http.Agent({ port: server.address().port })
+
+  http
+    .request({ agent })
+    .on('error', () => {})
+    .end()
+
+  await sub
+
+  let closed = false
+
+  const done = new Promise((resolve) =>
+    server.close(() => {
+      closed = true
+
+      resolve()
+    })
+  )
+
+  await pause(50)
+
+  t.absent(closed, 'close waits for the exchange to finish')
+
+  // An exchange in flight is not idle, so this leaves it alone.
+  server.closeIdleConnections()
+
+  await pause(50)
+
+  t.absent(closed, 'idle connections only')
+
+  // It will never finish, so the connection has to be taken down by hand.
+  server.closeAllConnections()
+
+  await done
+
+  t.pass('server closed')
+
+  agent.destroy()
+})
+
+test('close server with an idle keep-alive connection', async (t) => {
+  t.plan(3)
+
+  const server = http.createServer((req, res) => res.end('response')).listen(0)
+
+  await waitForServer(server)
+
+  const agent = new http.Agent({ port: server.address().port, keepAlive: true })
+
+  const result = await request({ agent })
+
+  t.is(result.response.statusCode, 200, 'response received')
+
+  // Nothing is in flight any more, so closing must not wait on the pooled
+  // connection.
+  server.close(() => t.pass('server closed'))
+
+  agent.destroy()
+
+  t.pass('close did not hang')
 })
 
 test('reuse port after closing server', async (t) => {
@@ -1071,6 +1883,252 @@ test('suspend agent', async (t) => {
     .end()
 })
 
+test('statusCode rejects anything that is not a status code', (t) => {
+  t.plan(4)
+
+  const res = new http.ServerResponse(null, new http.IncomingMessage())
+
+  // A status code is written straight into the status line, so a string could
+  // otherwise carry a whole response of its own.
+  t.exception(() => {
+    res.statusCode = '200 OK\r\nX-Injected: yes'
+  }, /INVALID_STATUS_CODE/)
+
+  t.exception(() => {
+    res.statusCode = 99
+  }, /INVALID_STATUS_CODE/)
+
+  t.exception(() => {
+    res.statusCode = 1000
+  }, /INVALID_STATUS_CODE/)
+
+  t.exception(() => {
+    res.statusCode = 200.5
+  }, /INVALID_STATUS_CODE/)
+})
+
+test('writeHead rejects anything that is not a status code', (t) => {
+  t.plan(2)
+
+  const res = new http.ServerResponse(null, new http.IncomingMessage())
+
+  t.exception(() => res.writeHead('200 OK\r\nX-Injected: yes'), /INVALID_STATUS_CODE/)
+  t.exception(() => res.writeHead(99), /INVALID_STATUS_CODE/)
+})
+
+test('unknown status code gets a placeholder reason phrase', async (t) => {
+  t.plan(1)
+
+  const server = http
+    .createServer((req, res) => {
+      res.statusCode = 599
+      res.end()
+    })
+    .listen(0)
+
+  await waitForServer(server)
+
+  const raw = await rawRequest(
+    server.address().port,
+    'GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n'
+  )
+
+  t.ok(raw.startsWith('HTTP/1.1 599 unknown\r\n'), 'reason phrase filled in')
+
+  await closeServer(server)
+})
+
+test('malformed request is reported as a client error', async (t) => {
+  t.plan(2)
+
+  const sub = t.test()
+  sub.plan(1)
+
+  const server = http.createServer((req, res) => res.end())
+
+  // A handler takes the error on, so the server does not answer it itself.
+  server.on('clientError', (err, socket) => {
+    sub.ok(err.code, 'client error reported')
+
+    socket.destroy()
+  })
+
+  server.listen(0)
+
+  await waitForServer(server)
+
+  const raw = await rawRequest(
+    server.address().port,
+    'GET / HTTP/1.1\r\nHost: localhost\r\nBad Header: value\r\n\r\n'
+  )
+
+  await sub
+
+  t.is(raw, '', 'handler answered it instead')
+
+  await closeServer(server)
+})
+
+test('malformed request is answered with 400 when unhandled', async (t) => {
+  t.plan(1)
+
+  const server = http.createServer((req, res) => res.end()).listen(0)
+
+  await waitForServer(server)
+
+  const raw = await rawRequest(
+    server.address().port,
+    'GET / HTTP/1.1\r\nHost: localhost\r\nBad Header: value\r\n\r\n'
+  )
+
+  t.ok(raw.startsWith('HTTP/1.1 400 Bad Request\r\n'), 'client told its request was bad')
+
+  await closeServer(server)
+})
+
+test('request truncated by the peer', async (t) => {
+  t.plan(3)
+
+  const sub = t.test()
+  sub.plan(3)
+
+  const server = http.createServer((req) => {
+    req
+      .on('end', () => sub.fail('the body never completed'))
+      // Reported as an abort rather than an error, so that a client dropping a
+      // connection cannot take the server down with it.
+      .on('aborted', () => sub.pass('request aborted'))
+      .on('close', () => sub.pass('request closed'))
+      .resume()
+  })
+
+  server.on('clientError', (err) => sub.ok(err, 'client error reported'))
+
+  server.listen(0)
+
+  await waitForServer(server)
+
+  const socket = tcp.createConnection(server.address().port, 'localhost')
+
+  socket.on('error', () => {})
+
+  // Promises ten bytes, sends four, then stops writing.
+  socket.write(Buffer.from('POST / HTTP/1.1\r\nHost: localhost\r\nContent-Length: 10\r\n\r\nabcd'))
+  socket.end()
+
+  await sub
+
+  t.pass('truncation surfaced')
+
+  socket.destroy()
+
+  await closeServer(server)
+
+  t.pass('server closed')
+})
+
+test('peer stops writing after a complete request', async (t) => {
+  t.plan(3)
+
+  const sub = t.test()
+  sub.plan(1)
+
+  const server = http.createServer((req, res) => {
+    req.on('end', () => sub.pass('request completed')).resume()
+
+    res.end('response')
+  })
+
+  // Half-closing after a whole request is not a truncation.
+  server.on('clientError', () => t.fail('no client error expected'))
+
+  server.listen(0)
+
+  await waitForServer(server)
+
+  const socket = tcp.createConnection(server.address().port, 'localhost')
+
+  socket.on('error', () => {})
+  socket.end(Buffer.from('GET / HTTP/1.1\r\nHost: localhost\r\n\r\n'))
+
+  await sub
+
+  t.pass('no truncation reported')
+
+  socket.destroy()
+
+  await closeServer(server)
+
+  t.pass('server closed')
+})
+
+test('setTimeout after the message has ended', async (t) => {
+  t.plan(3)
+
+  const sub = t.test()
+  sub.plan(1)
+
+  const server = http
+    .createServer((req, res) => {
+      req.resume().on('end', () => {
+        // The message has let go of its socket by now, which is no reason to
+        // throw at the caller.
+        sub.execution(() => req.setTimeout(1000), 'setTimeout does not throw')
+
+        res.end()
+      })
+    })
+    .listen(0)
+
+  await waitForServer(server)
+
+  const agent = new http.Agent({ port: server.address().port })
+
+  const result = await request({ agent, method: 'POST' }, (client) => client.end('body'))
+
+  await sub
+
+  t.is(result.response.statusCode, 200, 'response received')
+
+  agent.destroy()
+
+  await closeServer(server)
+
+  t.pass('server closed')
+})
+
+test('response carries a date, which can be replaced', async (t) => {
+  t.plan(2)
+
+  const server = http
+    .createServer((req, res) => {
+      if (req.url === '/own') res.setHeader('Date', 'whenever')
+
+      res.end()
+    })
+    .listen(0)
+
+  await waitForServer(server)
+
+  const { port } = server.address()
+
+  const raw = await rawRequest(
+    port,
+    'GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n'
+  )
+
+  t.ok(/^date: .+ GMT\r$/im.test(raw), 'date sent')
+
+  const own = await rawRequest(
+    port,
+    'GET /own HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n'
+  )
+
+  t.is(own.match(/^date:/gim).length, 1, 'date sent once')
+
+  await closeServer(server)
+})
+
 test('setHeader rejects CRLF in header value', (t) => {
   t.plan(1)
 
@@ -1198,6 +2256,68 @@ async function halfOpenServer(opts = {}) {
   await waitForServer(server)
 
   return server
+}
+
+// A raw server that replies with the given bytes, so that responses the library
+// would not produce itself can be tested. Optionally drops the connection right
+// after replying.
+async function rawServer(response, opts = {}) {
+  const { destroy = false, end = false } = opts
+
+  const server = tcp.createServer((socket) => {
+    socket.on('error', () => {})
+
+    socket.once('data', () => {
+      socket.write(Buffer.from(response))
+
+      if (end) socket.end()
+      else if (destroy) setTimeout(() => socket.destroy(), 100)
+    })
+  })
+
+  server.listen(0)
+
+  await waitForServer(server)
+
+  return server
+}
+
+// Sends raw bytes and collects the raw response, so that what goes on the wire
+// can be asserted on. Resolves once the peer closes, so the request should ask
+// for the connection to be closed. Pass `on` and `send` to write more once a
+// marker has been received, as an expectation requires.
+function rawRequest(port, request, opts = {}) {
+  const { on = null, send = null } = opts
+
+  return new Promise((resolve, reject) => {
+    const socket = tcp.createConnection(port, 'localhost')
+
+    const chunks = []
+
+    let sent = false
+
+    socket
+      .on('error', reject)
+      .on('data', (data) => {
+        chunks.push(data)
+
+        if (on !== null && sent === false && Buffer.concat(chunks).toString().includes(on)) {
+          sent = true
+          socket.write(Buffer.from(send))
+        }
+      })
+      .on('end', () => resolve(Buffer.concat(chunks).toString()))
+
+    socket.write(Buffer.from(request))
+  })
+}
+
+function pause(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+function waitFor(emitter, event) {
+  return new Promise((resolve) => emitter.once(event, resolve))
 }
 
 function closeServer(server) {
