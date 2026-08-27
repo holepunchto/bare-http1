@@ -2692,6 +2692,33 @@ test('a list header value is sent as one field per element', async (t) => {
   t.pass('server closed')
 })
 
+// And what goes out one field per element has to come back one element per
+// field, or a consumer would have to split on a separator that the values it is
+// splitting are allowed to contain.
+test('a list header value is received as it was sent', async (t) => {
+  t.plan(3)
+
+  const cookies = ['a=1; Expires=Thu, 01 Jan 2099 00:00:00 GMT', 'b=2']
+
+  const server = http
+    .createServer((req, res) => {
+      res.setHeader('Set-Cookie', cookies)
+      res.end('ok')
+    })
+    .listen(0)
+
+  await waitForServer(server)
+
+  const { response } = await request({ port: server.address().port })
+
+  t.ok(Array.isArray(response.headers['set-cookie']), 'received as a list')
+  t.alike(response.headers['set-cookie'], cookies, 'every cookie intact')
+
+  await closeServer(server)
+
+  t.pass('server closed')
+})
+
 // `Cookie` is the exception: it may only appear once, and its list separator is
 // `; ` rather than a comma.
 test('a cookie list header value is folded onto one line', async (t) => {
@@ -3787,6 +3814,178 @@ test('a HEAD response of unknown length announces no framing', async (t) => {
   t.absent(/Transfer-Encoding/i.test(response), 'no transfer encoding announced')
   t.absent(/Content-Length/i.test(response), 'no content length announced')
   t.ok(response.includes('200 OK'), 'headers still sent')
+
+  await closeServer(server)
+
+  t.pass('server closed')
+})
+
+// Time spent answering a request is not the peer's fault either. The headers
+// deadline is there to bound the wait for the next request, which only starts
+// once the current one has been answered.
+test('a slow handler does not lose its response to the headers timeout', async (t) => {
+  t.plan(3)
+
+  const server = http
+    .createServer({ headersTimeout: 200, requestTimeout: 0 }, (req, res) => {
+      req.resume()
+
+      setTimeout(() => res.end('the-response-body'), 600)
+    })
+    .listen(0)
+
+  await waitForServer(server)
+
+  const raw = await rawBytes(server.address().port, 'GET /slow HTTP/1.1\r\nHost: localhost\r\n\r\n')
+
+  t.ok(raw.includes('200 OK'), 'response sent')
+  t.ok(raw.endsWith('the-response-body'), 'response body sent in full')
+
+  await closeServer(server)
+
+  t.pass('server closed')
+})
+
+// A request that is closed after the next one has already been handed the
+// connection must not take it away from it, or the request in flight is left
+// waiting for a body that is being thrown away.
+test('a request that closes late does not detach the next one', async (t) => {
+  t.plan(4)
+
+  const sub = t.test()
+  sub.plan(1)
+
+  let first = null
+
+  const server = http
+    .createServer((req, res) => {
+      if (first === null) {
+        // Body deliberately left unread, so that the request stays open past
+        // its response and into the next request.
+        first = req
+      } else {
+        const chunks = []
+
+        req.on('data', (data) => chunks.push(data))
+        req.on('end', () =>
+          sub.alike(Buffer.concat(chunks), Buffer.from('bb'), 'second body received')
+        )
+      }
+
+      res.end('ok')
+    })
+    .listen(0)
+
+  await waitForServer(server)
+
+  const port = server.address().port
+
+  const raw = new Promise((resolve, reject) => {
+    const socket = tcp.createConnection(port, 'localhost')
+
+    const chunks = []
+
+    socket
+      .on('error', reject)
+      .on('data', (data) => chunks.push(data))
+      .on('end', () => resolve(Buffer.concat(chunks).toString()))
+
+    socket.write(Buffer.from('POST /1 HTTP/1.1\r\nHost: localhost\r\nContent-Length: 2\r\n\r\naa'))
+
+    // The second request is opened, then held mid body while the first one is
+    // closed underneath it, and only then finished.
+    setTimeout(() => {
+      socket.write(Buffer.from('POST /2 HTTP/1.1\r\nHost: localhost\r\nContent-Length: 2\r\n\r\n'))
+    }, 100)
+
+    setTimeout(() => first.destroy(), 200)
+    setTimeout(() => socket.write(Buffer.from('bb')), 300)
+    setTimeout(() => socket.end(), 500)
+  })
+
+  await sub
+
+  const response = await raw
+
+  t.is(response.split('HTTP/1.1 200 OK').length - 1, 2, 'both requests answered')
+  t.ok(first.destroyed, 'first request closed')
+
+  await closeServer(server)
+
+  t.pass('server closed')
+})
+
+// Whether a handler got around to reading a request it was given says nothing
+// about whether the peer is still being waited on.
+test('a connection whose request body went unread still counts as idle', async (t) => {
+  t.plan(3)
+
+  const server = http
+    .createServer((req, res) => res.end('ok')) // Body deliberately left unread
+    .listen(0)
+
+  await waitForServer(server)
+
+  const port = server.address().port
+
+  const socket = tcp.createConnection(port, 'localhost')
+
+  socket.on('error', () => {})
+
+  socket.write(Buffer.from('POST / HTTP/1.1\r\nHost: localhost\r\nContent-Length: 2\r\n\r\naa'))
+
+  await waitFor(socket, 'data')
+  await pause(100)
+
+  const connection = http.ServerConnection.for([...server.connections][0])
+
+  t.ok(connection.idle, 'connection idle once the request has arrived in full')
+
+  // Would otherwise wait for the headers deadline to reclaim the connection.
+  await new Promise((resolve) => {
+    server.close(resolve)
+
+    setTimeout(() => t.fail('server did not close'), 2000).unref()
+  })
+
+  t.pass('server closed')
+
+  socket.destroy()
+
+  await waitFor(socket, 'close')
+
+  t.pass('client socket closed')
+})
+
+// Splicing a canned response into one that has already begun would have the
+// peer count the status line towards the body it was promised, and read what
+// is left over as the start of the next response.
+test('a request that fails mid response is not answered over the response', async (t) => {
+  t.plan(4)
+
+  const server = http
+    .createServer((req, res) => {
+      res.setHeader('content-length', '10')
+      res.write(Buffer.from('01234'))
+      // Response deliberately left half written.
+    })
+    .listen(0)
+
+  await waitForServer(server)
+
+  // The malformed request arrives while the response is still half written.
+  const raw = await rawRequest(
+    server.address().port,
+    'GET /1 HTTP/1.1\r\nHost: localhost\r\n\r\n',
+    {
+      on: '01234',
+      send: 'GET /2 HTTP/1.1\r\nHost: localhost\r\nBad Header\r\n\r\n'
+    }
+  )
+
+  t.ok(raw.includes('200 OK'), 'response sent')
+  t.absent(raw.includes('400 Bad Request'), 'no error response spliced in')
+  t.is(raw.split('HTTP/1.1').length - 1, 1, 'only one status line on the wire')
 
   await closeServer(server)
 
