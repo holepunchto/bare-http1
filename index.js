@@ -32,7 +32,7 @@ exports.request = function request(url, opts, onresponse) {
   if (typeof url === 'string') url = new URL(url)
 
   if (isURL(url)) {
-    opts = opts ? { ...url, ...opts } : { ...url }
+    opts = { ...url, ...opts }
 
     if (opts.protocol === undefined) opts.protocol = url.protocol
 
@@ -40,7 +40,7 @@ exports.request = function request(url, opts, onresponse) {
     opts.path = url.pathname + url.search
     opts.port = url.port ? parseInt(url.port, 10) : defaultPort(url)
   } else {
-    opts = url ? { ...url } : {}
+    opts = { ...url }
 
     // For Node.js compatibility
     opts.host = opts.hostname || opts.host
