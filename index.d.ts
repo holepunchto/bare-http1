@@ -158,6 +158,9 @@ interface HTTPServer<M extends HTTPServerEvents = HTTPServerEvents> extends TCPS
   readonly timeout: number | undefined
   headersTimeout: number
   requestTimeout: number
+  keepAliveTimeout: number
+  maxHeaderSize: number
+  maxHeadersCount: number
 
   setTimeout(ms: number, ontimeout?: () => void): this
 
@@ -204,11 +207,17 @@ export interface HTTPServerConnectionOptions {
 }
 
 export interface HTTPServerOptions extends HTTPServerConnectionOptions {
-  // How long a connection may spend sending its request headers, and how long
-  // the whole request may take, before it is given up on. Time spent waiting on
-  // this side does not count towards either. Zero disables them.
+  // How long a connection may spend sending its request headers, how long the
+  // whole request may take, and how long the connection is kept once a request
+  // has been answered, before it is given up on. Time spent waiting on this
+  // side does not count towards any of them. Zero disables them.
   headersTimeout?: number
   requestTimeout?: number
+  keepAliveTimeout?: number
+
+  // The most a peer may send before it has said anything that can be acted on.
+  maxHeaderSize?: number
+  maxHeadersCount?: number
 }
 
 interface HTTPServerConnection {

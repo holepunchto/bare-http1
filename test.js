@@ -3057,9 +3057,7 @@ test('request body that never arrives times out', async (t) => {
 
   await sub
 
-  // A handler may already be part way through answering, so the connection is
-  // cut rather than answered a second time.
-  t.is(raw, '', 'connection cut')
+  t.ok(raw.startsWith('HTTP/1.1 408 Request Timeout\r\n'), 'peer told why')
 
   await closeServer(server)
 
@@ -4373,7 +4371,7 @@ test('a malformed request takes the connection with it', async (t) => {
 test('an idle keep-alive connection is reclaimed', async (t) => {
   t.plan(3)
 
-  const server = http.createServer({ headersTimeout: 100 }, (req, res) => res.end('ok')).listen(0)
+  const server = http.createServer({ keepAliveTimeout: 100 }, (req, res) => res.end('ok')).listen(0)
 
   await waitForServer(server)
 
@@ -4861,6 +4859,601 @@ test('an expectation from an HTTP/1.0 client is left alone', async (t) => {
   )
 
   t.ok(response.includes('200 OK'), 'answered normally')
+
+  server.close(() => t.pass('server closed'))
+})
+
+// A caller that sends the headers itself, before writing anything, still needs
+// the body framed: headers that announce no body at all turn whatever follows
+// them into the start of the next message on the connection.
+test('flushed headers frame the response', async (t) => {
+  t.plan(4)
+
+  const server = http
+    .createServer((req, res) => {
+      res.flushHeaders()
+      res.write('a')
+      res.end('b')
+    })
+    .listen(0)
+
+  await waitForServer(server)
+
+  const response = await rawUntil(
+    server.address().port,
+    'GET / HTTP/1.1\r\nHost: localhost\r\n\r\n',
+    '0\r\n\r\n'
+  )
+
+  t.ok(response.includes('Transfer-Encoding: chunked\r\n'), 'framed as chunked')
+  t.absent(response.includes('Content-Length'), 'not framed twice')
+  t.ok(response.endsWith('1\r\na\r\n1\r\nb\r\n0\r\n\r\n'), 'body chunked and terminated')
+
+  server.close(() => t.pass('server closed'))
+})
+
+test('flushed headers frame the response of a pipelined pair', async (t) => {
+  t.plan(2)
+
+  const server = http
+    .createServer((req, res) => {
+      res.flushHeaders()
+      res.end(req.url)
+    })
+    .listen(0)
+
+  await waitForServer(server)
+
+  const response = await rawUntil(
+    server.address().port,
+    'GET /one HTTP/1.1\r\nHost: localhost\r\n\r\nGET /two HTTP/1.1\r\nHost: localhost\r\n\r\n',
+    '/two'
+  )
+
+  // Two framed responses rather than one whose body swallows the other.
+  t.is(response.split('HTTP/1.1 200 OK').length - 1, 2, 'both responses framed')
+
+  server.close(() => t.pass('server closed'))
+})
+
+test('flushed headers frame the request', async (t) => {
+  t.plan(3)
+
+  const handled = []
+
+  const server = http
+    .createServer((req, res) => {
+      handled.push(req.method + ' ' + req.url)
+
+      req.resume()
+      res.end('ok')
+    })
+    .listen(0)
+
+  await waitForServer(server)
+
+  const client = http.request({
+    port: server.address().port,
+    method: 'POST',
+    path: '/upload',
+    agent: false
+  })
+
+  client.on('error', () => {})
+  client.on('response', (res) => res.resume())
+
+  client.flushHeaders()
+
+  // Body bytes that look like a request of their own. Unframed they would be
+  // read as one.
+  client.end('GET /admin HTTP/1.1\r\nHost: localhost\r\n\r\n')
+
+  await pause(200)
+
+  t.is(handled.length, 1, 'one request reached the server')
+  t.is(handled[0], 'POST /upload', 'and it is the one that was made')
+
+  await closeServer(server)
+
+  t.pass('server closed')
+})
+
+// A request that has not been written in full leaves the peer waiting for the
+// rest of a body it was promised, so anything sent next on the connection would
+// be read as the remainder of it.
+test('a connection is not reused after an unfinished request', async (t) => {
+  t.plan(3)
+
+  const server = await rawServer(
+    'HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: keep-alive\r\n\r\n'
+  )
+
+  const agent = new http.Agent({ keepAlive: true })
+
+  const client = http.request({
+    port: server.address().port,
+    method: 'POST',
+    agent,
+    headers: { 'content-length': 1024 }
+  })
+
+  client.on('error', () => {})
+
+  // Part of the body that was promised, and no more.
+  client.write(Buffer.alloc(16, 0x41))
+
+  const response = await new Promise((resolve) => client.on('response', resolve))
+
+  response.resume()
+
+  await waitFor(response, 'end')
+  await pause(100)
+
+  t.is([...agent.freeSockets].length, 0, 'the socket was not pooled')
+  t.is([...agent.sockets].length, 0, 'and it was taken down')
+
+  agent.destroy()
+
+  await closeServer(server)
+
+  t.pass('server closed')
+})
+
+test('a connection is reused after a request that was written in full', async (t) => {
+  t.plan(2)
+
+  const server = await rawServer(
+    'HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: keep-alive\r\n\r\n'
+  )
+
+  const agent = new http.Agent({ keepAlive: true })
+
+  const client = http.request({
+    port: server.address().port,
+    method: 'POST',
+    agent,
+    headers: { 'content-length': 2 }
+  })
+
+  client.on('error', () => {})
+  client.end('ab')
+
+  const response = await new Promise((resolve) => client.on('response', resolve))
+
+  response.resume()
+
+  await waitFor(response, 'end')
+  await pause(100)
+
+  t.is([...agent.freeSockets].length, 1, 'the socket was pooled')
+
+  agent.destroy()
+
+  await closeServer(server)
+
+  t.pass('server closed')
+})
+
+// A consumer has no reason to listen for an error on a response it only writes
+// to, so a response that cannot be sent is reported on the server rather than
+// left to take the process down.
+test('a response that cannot be framed is reported as a client error', async (t) => {
+  t.plan(3)
+
+  const server = http
+    .createServer((req, res) => {
+      res.setHeader('content-length', '2')
+      res.end('far too long')
+    })
+    .listen(0)
+
+  const errors = []
+
+  server.on('clientError', (err) => errors.push(err.code))
+
+  await waitForServer(server)
+
+  await rawBytes(server.address().port, 'GET / HTTP/1.1\r\nHost: localhost\r\n\r\n')
+
+  await pause(100)
+
+  t.is(errors.length, 1, 'one client error')
+  t.is(errors[0], 'CONTENT_LENGTH_MISMATCH', 'and it says what went wrong')
+
+  await closeServer(server)
+
+  t.pass('server closed')
+})
+
+test('a response with an unusable content length reaches the peer as nothing', async (t) => {
+  t.plan(3)
+
+  const server = http
+    .createServer((req, res) => {
+      res.setHeader('content-length', 'not-a-length')
+      res.end('body')
+    })
+    .listen(0)
+
+  const errors = []
+
+  server.on('clientError', (err) => errors.push(err.code))
+
+  await waitForServer(server)
+
+  const response = await rawBytes(
+    server.address().port,
+    'GET / HTTP/1.1\r\nHost: localhost\r\n\r\n'
+  )
+
+  t.is(errors[0], 'INVALID_CONTENT_LENGTH', 'reported as a client error')
+  t.is(response, '', 'and no part of the response went out')
+
+  await closeServer(server)
+
+  t.pass('server closed')
+})
+
+// The field values are checked against the Latin-1 range, so a value above
+// `\x7f` is one byte on the wire rather than the two UTF-8 would spend.
+test('header values above ASCII are sent as Latin-1', async (t) => {
+  t.plan(3)
+
+  const server = http
+    .createServer((req, res) => {
+      res.setHeader('x-test', 'éÿ')
+      res.end()
+    })
+    .listen(0)
+
+  await waitForServer(server)
+
+  const received = await new Promise((resolve) => {
+    const socket = tcp.createConnection(server.address().port, 'localhost')
+
+    let raw = ''
+
+    socket.on('error', () => {})
+    socket.on('data', (data) => {
+      raw += data.toString('latin1')
+
+      if (raw.includes('\r\n\r\n')) {
+        socket.destroy()
+        resolve(raw)
+      }
+    })
+
+    socket.write(Buffer.from('GET / HTTP/1.1\r\nHost: localhost\r\n\r\n'))
+  })
+
+  t.ok(received.includes('X-Test: \xe9\xff\r\n'), 'one byte per character')
+
+  const server2 = await rawServer(
+    'HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n'
+  )
+
+  let sent = ''
+
+  server2.on('connection', (socket) =>
+    socket.on('data', (data) => (sent += data.toString('latin1')))
+  )
+
+  await new Promise((resolve) => {
+    const client = http.request(
+      { port: server2.address().port, agent: false, headers: { 'x-test': 'éÿ' } },
+      (res) => {
+        res.resume()
+        res.on('end', resolve)
+      }
+    )
+
+    client.on('error', resolve)
+    client.end()
+  })
+
+  t.ok(sent.includes('X-Test: \xe9\xff\r\n'), 'and on the way out too')
+
+  await closeServer(server2)
+  await closeServer(server)
+
+  t.pass('server closed')
+})
+
+// The value that goes on the line is the string that was checked, so a value
+// which answers a second coercion differently has nothing to gain by it.
+test('a header value is only ever coerced once', async (t) => {
+  t.plan(3)
+
+  let coercions = 0
+
+  const shifty = {
+    toString() {
+      return ++coercions > 1 ? 'x\r\nX-Injected: yes' : 'harmless'
+    }
+  }
+
+  const server = http
+    .createServer((req, res) => {
+      res.on('error', () => {})
+      res.setHeader('x-foo', shifty)
+      res.end('ok')
+    })
+    .listen(0)
+
+  server.on('clientError', () => {})
+
+  await waitForServer(server)
+
+  const raw = await rawBytes(server.address().port, 'GET / HTTP/1.1\r\nHost: localhost\r\n\r\n')
+
+  t.absent(raw.includes('X-Injected'), 'nothing was injected')
+  t.absent(raw.includes('\r\n\r\nok') && raw.includes('X-Foo: x\r\n'), 'no split header')
+
+  await closeServer(server)
+
+  t.pass('server closed')
+})
+
+// Nothing here can offer transport security, so a caller that asked for it is
+// refused rather than quietly given a connection in the clear.
+test('a request for a secure scheme is refused', async (t) => {
+  t.plan(4)
+
+  t.exception(
+    () => http.request('https://example.com/secret', { agent: false }),
+    /INVALID_PROTOCOL/,
+    'https refused'
+  )
+
+  t.exception(
+    () => http.request({ protocol: 'wss:', host: 'example.com', agent: false }),
+    /INVALID_PROTOCOL/,
+    'wss refused'
+  )
+
+  t.exception(
+    () => http.request({ protocol: 'file:', host: 'example.com', agent: false }),
+    /INVALID_PROTOCOL/,
+    'an unrelated scheme refused'
+  )
+
+  const server = http.createServer((req, res) => res.end('ok')).listen(0)
+
+  await waitForServer(server)
+
+  const { response } = await request({
+    port: server.address().port,
+    protocol: 'http:',
+    agent: false
+  })
+
+  t.is(response.statusCode, 200, 'http is served')
+
+  await closeServer(server)
+})
+
+// A URL writes an IPv6 address inside brackets, which belong to how a host is
+// written in a URL rather than to the address itself.
+test('a request to an IPv6 URL resolves', async (t) => {
+  t.plan(4)
+
+  const server = http.createServer((req, res) => res.end(req.headers.host)).listen(0, '::1')
+
+  await waitForServer(server)
+
+  const { port } = server.address()
+
+  // Resolved rather than rejected on failure, so that a host the resolver
+  // cannot make sense of reads as a failed assertion rather than as a rejection
+  // that takes the run with it.
+  const reply = await new Promise((resolve) => {
+    const client = http.request(`http://[::1]:${port}/`, { agent: false }, (res) => {
+      let body = ''
+
+      res.on('data', (data) => (body += data))
+      res.on('end', () => resolve({ body, error: null }))
+    })
+
+    client.on('error', (err) => resolve({ body: null, error: err.code }))
+    client.end()
+  })
+
+  t.is(reply.error, null, 'the URL form reached the server')
+  t.is(reply.body, `[::1]:${port}`, 'and the host header keeps its brackets')
+
+  const { response } = await request({ host: '::1', port, agent: false })
+
+  t.is(response.statusCode, 200, 'and the options form still works')
+
+  await closeServer(server)
+
+  t.pass('server closed')
+})
+
+// Chunked is the only coding this side can apply, so one it cannot is refused
+// rather than left out of the announcement: the body would then go out encoded
+// but be read as though it never had been.
+test('a transfer coding that is not chunked is refused', async (t) => {
+  t.plan(4)
+
+  const server = http
+    .createServer((req, res) => {
+      res.on('error', () => {})
+      res.setHeader('transfer-encoding', req.url.slice(1))
+      res.end('body')
+    })
+    .listen(0)
+
+  const errors = []
+
+  server.on('clientError', (err) => errors.push(err.code))
+
+  await waitForServer(server)
+
+  await rawBytes(server.address().port, 'GET /gzip,%20chunked HTTP/1.1\r\nHost: localhost\r\n\r\n')
+  await rawBytes(server.address().port, 'GET /gzip HTTP/1.1\r\nHost: localhost\r\n\r\n')
+
+  await pause(100)
+
+  t.is(errors.length, 2, 'both refused')
+  t.is(errors[0], 'INVALID_TRANSFER_ENCODING', 'a list including chunked')
+  t.is(errors[1], 'INVALID_TRANSFER_ENCODING', 'and one without it')
+
+  await closeServer(server)
+
+  t.pass('server closed')
+})
+
+test('a bare chunked transfer coding is taken over', async (t) => {
+  t.plan(3)
+
+  const server = http
+    .createServer((req, res) => {
+      res.setHeader('transfer-encoding', 'chunked')
+      res.end('body')
+    })
+    .listen(0)
+
+  await waitForServer(server)
+
+  const raw = await rawUntil(
+    server.address().port,
+    'GET / HTTP/1.1\r\nHost: localhost\r\n\r\n',
+    '0\r\n\r\n'
+  )
+
+  t.is(raw.split('Transfer-Encoding').length - 1, 1, 'announced once')
+  t.ok(raw.endsWith('4\r\nbody\r\n0\r\n\r\n'), 'and the body is chunked')
+
+  server.close(() => t.pass('server closed'))
+})
+
+// Between requests there is nothing being waited on but the next one, which is
+// worth far less patience than an unfinished request.
+test('the keep-alive wait is separate from the headers wait', async (t) => {
+  t.plan(4)
+
+  const server = http
+    .createServer({ headersTimeout: 5000, keepAliveTimeout: 100 }, (req, res) => res.end('ok'))
+    .listen(0)
+
+  await waitForServer(server)
+
+  const peer = rawIdle(server.address().port, 'GET / HTTP/1.1\r\nHost: localhost\r\n\r\n')
+
+  await pause(400)
+
+  t.ok(peer.response.includes('200 OK'), 'the request was answered')
+  t.is(server.connections.size, 0, 'and the idle connection was reclaimed')
+
+  peer.socket.destroy()
+
+  // The other way around: a peer part way through its headers is held to the
+  // headers deadline, not the far shorter keep-alive one.
+  const server2 = http
+    .createServer({ headersTimeout: 100, keepAliveTimeout: 5000 }, (req, res) => res.end('ok'))
+    .listen(0)
+
+  await waitForServer(server2)
+
+  const raw = await rawBytes(server2.address().port, 'GET / HTTP/1.1\r\nHost: localhost\r\n')
+
+  t.ok(raw.startsWith('HTTP/1.1 408 Request Timeout\r\n'), 'the stalled request timed out')
+
+  await closeServer(server2)
+
+  server.close(() => t.pass('server closed'))
+})
+
+// Told apart from a request that is merely malformed, as the peer can do
+// something about headers that are too large.
+test('headers that do not fit are answered 431', async (t) => {
+  t.plan(4)
+
+  const server = http.createServer({ maxHeaderSize: 256 }, (req, res) => res.end('ok')).listen(0)
+
+  await waitForServer(server)
+
+  const raw = await rawBytes(
+    server.address().port,
+    `GET / HTTP/1.1\r\nHost: localhost\r\nX-Big: ${'a'.repeat(512)}\r\n\r\n`
+  )
+
+  t.ok(raw.startsWith('HTTP/1.1 431 Request Header Fields Too Large\r\n'), 'answered 431')
+  t.ok(raw.includes('Connection: close\r\n'), 'connection close announced')
+
+  const malformed = await rawBytes(
+    server.address().port,
+    'GET / HTTP/1.1\r\nHost: localhost\r\nBad\x00Header: value\r\n\r\n'
+  )
+
+  t.ok(malformed.startsWith('HTTP/1.1 400 Bad Request\r\n'), 'and a malformed one still 400')
+
+  await closeServer(server)
+
+  t.pass('server closed')
+})
+
+test('the header count limit can be set', async (t) => {
+  t.plan(3)
+
+  const server = http.createServer({ maxHeadersCount: 4 }, (req, res) => res.end('ok')).listen(0)
+
+  await waitForServer(server)
+
+  const headers = Array.from({ length: 8 }, (_, i) => `X-${i}: v\r\n`).join('')
+
+  const raw = await rawBytes(
+    server.address().port,
+    `GET / HTTP/1.1\r\nHost: localhost\r\n${headers}\r\n`
+  )
+
+  t.ok(raw.startsWith('HTTP/1.1 431 Request Header Fields Too Large\r\n'), 'answered 431')
+
+  const ok = await rawUntil(
+    server.address().port,
+    'GET / HTTP/1.1\r\nHost: localhost\r\nX-A: v\r\n\r\n',
+    'ok'
+  )
+
+  t.ok(ok.includes('200 OK'), 'and a request within the limit is served')
+
+  await closeServer(server)
+
+  t.pass('server closed')
+})
+
+// A copy, so that a caller cannot write to the bag the message serializes from
+// and get around the checks `setHeader` runs.
+test('the outgoing headers are handed out as a copy', async (t) => {
+  t.plan(4)
+
+  const server = http
+    .createServer((req, res) => {
+      res.setHeader('x-a', '1')
+
+      const headers = res.headers
+
+      headers['x-b'] = 'bad\r\nX-Injected: yes'
+
+      delete headers['x-a']
+
+      t.is(res.getHeader('x-a'), '1', 'the field that was set is untouched')
+      t.absent(res.hasHeader('x-b'), 'and the one written to the copy was not taken')
+
+      res.end('ok')
+    })
+    .listen(0)
+
+  await waitForServer(server)
+
+  const raw = await rawUntil(
+    server.address().port,
+    'GET / HTTP/1.1\r\nHost: localhost\r\n\r\n',
+    'ok'
+  )
+
+  t.absent(raw.includes('X-Injected'), 'nothing was injected')
 
   server.close(() => t.pass('server closed'))
 })

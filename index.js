@@ -1,3 +1,5 @@
+const errors = require('./lib/errors')
+
 exports.IncomingMessage = require('./lib/incoming-message')
 exports.OutgoingMessage = require('./lib/outgoing-message')
 
@@ -12,7 +14,7 @@ exports.ClientRequest = require('./lib/client-request')
 exports.ClientConnection = require('./lib/client-connection')
 
 exports.constants = require('./lib/constants')
-exports.errors = require('./lib/errors')
+exports.errors = errors
 
 exports.METHODS = Object.values(exports.constants.method) // For Node.js compatibility
 exports.STATUS_CODES = exports.constants.status // For Node.js compatibility
@@ -32,7 +34,9 @@ exports.request = function request(url, opts, onresponse) {
   if (isURL(url)) {
     opts = opts ? { ...url, ...opts } : { ...url }
 
-    opts.host = url.hostname
+    if (opts.protocol === undefined) opts.protocol = url.protocol
+
+    opts.host = hostname(url)
     opts.path = url.pathname + url.search
     opts.port = url.port ? parseInt(url.port, 10) : defaultPort(url)
   } else {
@@ -42,6 +46,8 @@ exports.request = function request(url, opts, onresponse) {
     opts.host = opts.hostname || opts.host
     opts.port = typeof opts.port === 'string' ? parseInt(opts.port, 10) : opts.port
   }
+
+  validateProtocol(opts.protocol)
 
   return new exports.ClientRequest(opts, onresponse)
 }
@@ -66,6 +72,20 @@ function defaultPort(url) {
   }
 
   return null
+}
+
+function validateProtocol(protocol) {
+  if (protocol === undefined || protocol === null) return
+
+  if (protocol !== 'http:' && protocol !== 'ws:') {
+    throw errors.INVALID_PROTOCOL(`Unsupported protocol: ${JSON.stringify(protocol)}`)
+  }
+}
+
+function hostname(url) {
+  const host = url.hostname
+
+  return host.charCodeAt(0) === 91 /* [ */ ? host.slice(1, -1) : host
 }
 
 // https://url.spec.whatwg.org/#api
