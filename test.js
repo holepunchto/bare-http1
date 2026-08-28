@@ -613,6 +613,60 @@ test('response to HEAD has no body', async (t) => {
   await closeServer(server)
 })
 
+// A length nothing was written for would describe the resource as empty rather
+// than say that no body was generated for it.
+test('a HEAD response announces only a length it knows', async (t) => {
+  const server = await listen(
+    http.createServer((req, res) => {
+      res.setHeader('connection', 'close')
+
+      switch (req.url) {
+        case '/whole':
+          return res.end('response')
+
+        case '/streamed':
+          res.write('response')
+          return res.end()
+
+        case '/declared':
+          res.setHeader('content-length', 1234)
+          return res.end()
+
+        default:
+          return res.end()
+      }
+    })
+  )
+
+  const port = server.address().port
+
+  const head = (path) => rawRequest(port, `HEAD ${path} HTTP/1.1\r\nHost: localhost\r\n\r\n`)
+
+  const whole = await head('/whole')
+  const streamed = await head('/streamed')
+  const declared = await head('/declared')
+  const nothing = await head('/nothing')
+
+  t.ok(whole.includes('Content-Length: 8\r\n'), 'a body that was written has its length given')
+  t.ok(declared.includes('Content-Length: 1234\r\n'), 'as has one the caller declared itself')
+
+  t.absent(/content-length/i.test(streamed), 'a body of unknown length has none to give')
+  t.absent(/transfer-encoding/i.test(streamed), 'and no terminator is promised for it either')
+
+  t.absent(/content-length/i.test(nothing), 'and neither has a body that was never written')
+
+  for (const [name, response] of [
+    ['whole', whole],
+    ['streamed', streamed],
+    ['declared', declared],
+    ['nothing', nothing]
+  ]) {
+    t.ok(response.endsWith('\r\n\r\n'), `nothing follows the headers of ${name}`)
+  }
+
+  await closeServer(server)
+})
+
 test('response to HEAD does not consume the response after it', async (t) => {
   const sub = t.test()
   sub.plan(4)
@@ -997,6 +1051,117 @@ test('an upgrade with a chunked body takes effect once the body is decoded', asy
 
   t.alike(body, Buffer.from('hello'), 'the body is decoded for the request')
   t.alike(head, Buffer.from('first frame'), 'and the coding does not reach the handover')
+
+  await closeServer(server)
+})
+
+// Nothing reads the body until the handover, so nothing pushes back on it and a
+// peer that could name its own size would have an unbounded sink here.
+test('an upgrade body larger than the limit is refused before it is read', async (t) => {
+  const server = await listen(http.createServer({ maxUpgradeBodySize: 1024 }))
+
+  server.on('upgrade', () => t.fail('the handover must not happen'))
+
+  const response = await rawBytes(
+    server.address().port,
+    'POST / HTTP/1.1\r\n' +
+      'Host: localhost\r\n' +
+      'Upgrade: weird-protocol\r\n' +
+      'Connection: Upgrade\r\n' +
+      'Content-Length: 4096\r\n' +
+      '\r\n'
+  )
+
+  t.ok(response.startsWith('HTTP/1.1 413 Payload Too Large\r\n'), 'answered 413')
+  t.is(server.connections.size, 0, 'and the connection was taken down')
+
+  await closeServer(server)
+})
+
+// A chunked body announces no size, so the limit has to hold as it arrives.
+test('a chunked upgrade body is cut off once it passes the limit', async (t) => {
+  const server = await listen(http.createServer({ maxUpgradeBodySize: 1024 }))
+
+  server.on('upgrade', () => t.fail('the handover must not happen'))
+
+  const failed = new Promise((resolve) => server.on('clientError', resolve))
+
+  const chunk = 'a'.repeat(512)
+
+  const peer = rawIdle(
+    server.address().port,
+    'POST / HTTP/1.1\r\n' +
+      'Host: localhost\r\n' +
+      'Upgrade: weird-protocol\r\n' +
+      'Connection: Upgrade\r\n' +
+      'Transfer-Encoding: chunked\r\n' +
+      '\r\n' +
+      ('200\r\n' + chunk + '\r\n').repeat(8)
+  )
+
+  t.is((await failed).code, 'BODY_TOO_LARGE', 'the body was cut off')
+
+  peer.socket.destroy()
+
+  await closeServer(server)
+})
+
+test('an upgrade body within the limit is still handed to the request', async (t) => {
+  const server = await listen(http.createServer({ maxUpgradeBodySize: 1024 }))
+
+  const handed = new Promise((resolve) => {
+    server.on('upgrade', (req, socket, head) => {
+      const chunks = []
+
+      req.on('data', (data) => chunks.push(data)).on('end', () => resolve(Buffer.concat(chunks)))
+
+      socket.end()
+    })
+  })
+
+  await rawBytes(
+    server.address().port,
+    'POST / HTTP/1.1\r\n' +
+      'Host: localhost\r\n' +
+      'Upgrade: weird-protocol\r\n' +
+      'Connection: Upgrade\r\n' +
+      'Content-Length: 5\r\n' +
+      '\r\n' +
+      'hello'
+  )
+
+  t.alike(await handed, Buffer.from('hello'), 'the body was held for the request')
+
+  await closeServer(server)
+})
+
+test('an upgrade body limit of zero holds nothing back', async (t) => {
+  const server = await listen(http.createServer({ maxUpgradeBodySize: 0 }))
+
+  const handed = new Promise((resolve) => {
+    server.on('upgrade', (req, socket, head) => {
+      const chunks = []
+
+      req.on('data', (data) => chunks.push(data)).on('end', () => resolve(Buffer.concat(chunks)))
+
+      socket.end()
+    })
+  })
+
+  const body = 'a'.repeat(100000)
+
+  await rawBytes(
+    server.address().port,
+    'POST / HTTP/1.1\r\n' +
+      'Host: localhost\r\n' +
+      'Upgrade: weird-protocol\r\n' +
+      'Connection: Upgrade\r\n' +
+      `Content-Length: ${body.length}\r\n` +
+      '\r\n' +
+      body
+  )
+
+  t.is((await handed).byteLength, body.length, 'the whole body was held')
 
   await closeServer(server)
 })
@@ -1690,8 +1855,10 @@ test('socket closes when the peer half-closes it', async (t) => {
   await closeServer(server)
 })
 
-test('reused socket is tracked once', async (t) => {
-  t.plan(6)
+// A socket is either one the agent is using or one waiting in its pool, never
+// both and never counted twice, however many exchanges it goes on to carry.
+test('a reused socket is only ever tracked in one place', async (t) => {
+  t.plan(15)
 
   const server = await listen(http.createServer((req, res) => res.end('response')))
 
@@ -1706,21 +1873,26 @@ test('reused socket is tracked once', async (t) => {
       if (socket === null) socket = req.socket
       else t.is(req.socket, socket, 'socket reused')
 
+      t.is([...agent.sockets].length, 1, 'in use while the exchange is on')
+      t.is([...agent.freeSockets].length, 0, 'and not in the pool as well')
+
       req.end()
     })
 
     await responded
 
-    t.is([...agent.sockets].length, 1, 'socket tracked once')
+    t.is([...agent.sockets].length, 0, 'no longer in use once it has been answered')
+    t.is([...agent.freeSockets].length, 1, 'and in the pool exactly once')
   }
 
   const closed = waitFor(socket, 'close')
 
+  // Pooled rather than in use, so this also says a pooled one is not left behind.
   agent.destroy()
 
   await closed
 
-  t.is([...agent.sockets].length, 0, 'no sockets left')
+  t.is([...agent.freeSockets].length, 0, 'the pooled socket was taken down')
 
   await closeServer(server)
 })
@@ -3095,6 +3267,80 @@ test('writeHead takes the header list forms', async (t) => {
   await closeServer(server)
 })
 
+// Overwriting would drop every value but the last without saying so.
+test('writeHead keeps every value a list of pairs names for the same field', async (t) => {
+  const server = await listen(
+    http.createServer((req, res) => {
+      res.writeHead(200, [
+        ['set-cookie', 'a=1'],
+        ['set-cookie', 'b=2'],
+        ['connection', 'close']
+      ])
+
+      res.end('ok')
+    })
+  )
+
+  const response = await rawRequest(
+    server.address().port,
+    'GET / HTTP/1.1\r\nHost: localhost\r\n\r\n'
+  )
+
+  t.ok(response.includes('Set-Cookie: a=1\r\n'), 'the first value was kept')
+  t.ok(response.includes('Set-Cookie: b=2\r\n'), 'and so was the second')
+
+  await closeServer(server)
+})
+
+test('appendHeader adds to a field rather than replacing it', async (t) => {
+  const server = await listen(
+    http.createServer((req, res) => {
+      res.appendHeader('X-A', '1')
+      res.appendHeader('x-a', '2')
+      res.appendHeader('X-A', ['3', '4'])
+
+      t.alike(res.getHeader('x-a'), ['1', '2', '3', '4'], 'every value was kept')
+
+      res.setHeader('connection', 'close')
+      res.end('ok')
+    })
+  )
+
+  const response = await rawRequest(
+    server.address().port,
+    'GET / HTTP/1.1\r\nHost: localhost\r\n\r\n'
+  )
+
+  t.ok(response.includes('X-A: 1\r\nX-A: 2\r\nX-A: 3\r\nX-A: 4\r\n'), 'one line each')
+
+  await closeServer(server)
+})
+
+test('appendHeader validates what it is given', (t) => {
+  const res = new http.ServerResponse(null, new http.IncomingMessage())
+
+  t.exception(() => res.appendHeader('bad header', '1'), /INVALID_HEADER_NAME/)
+  t.exception(() => res.appendHeader('x-a', 'value\r\nInjected: x'), /INVALID_HEADER_VALUE/)
+
+  res.appendHeader('x-a', '1')
+
+  t.exception(() => res.appendHeader('__proto__', '1'), /INVALID_HEADER_NAME/)
+  t.is(res.getHeader('x-a'), '1', 'the field that was set is unaffected')
+})
+
+test('a server takes a null options bag', async (t) => {
+  const server = await listen(new http.Server(null, (req, res) => res.end('ok')))
+
+  const response = await rawRequest(
+    server.address().port,
+    'GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n'
+  )
+
+  t.ok(response.endsWith('\r\n\r\nok'), 'the request was served')
+
+  await closeServer(server)
+})
+
 test('an HTTP/1.0 client that asks to keep the connection is told that it is kept', async (t) => {
   const server = await listen(
     http.createServer((req, res) => {
@@ -4135,6 +4381,85 @@ test('a connection is reused after a request that was written in full', async (t
 
   client.on('error', () => {})
   client.end('ab')
+
+  const response = await waitFor(client, 'response')
+
+  response.resume()
+
+  await waitFor(response, 'end')
+  await pause(100)
+
+  t.is([...agent.freeSockets].length, 1, 'the socket was pooled')
+
+  agent.destroy()
+
+  await closeServer(server)
+})
+
+// What the peer said too much of would be read as the answer to whatever the
+// connection carried next.
+test('a connection the peer said too much on is not reused', async (t) => {
+  const server = await rawServer('HTTP/1.1 200 OK\r\nContent-Length: 1\r\n\r\naEXTRA')
+
+  const agent = new http.Agent({ keepAlive: true })
+
+  const client = http.request({ port: server.address().port, agent })
+
+  client.on('error', () => {})
+  client.end()
+
+  const response = await waitFor(client, 'response')
+
+  response.resume()
+
+  await waitFor(response, 'end')
+  await pause(100)
+
+  t.is([...agent.freeSockets].length, 0, 'the socket was not pooled')
+
+  agent.destroy()
+
+  await closeServer(server)
+})
+
+// The same thing said a different way, as a HEAD response is framed as though it
+// had a body but the bytes are never read.
+test('a connection is not reused after a body arrives for a HEAD request', async (t) => {
+  const server = await rawServer('HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nhello')
+
+  const agent = new http.Agent({ keepAlive: true })
+
+  const client = http.request({ port: server.address().port, method: 'HEAD', agent })
+
+  client.on('error', () => {})
+  client.end()
+
+  const response = await waitFor(client, 'response')
+
+  response.resume()
+
+  await waitFor(response, 'end')
+  await pause(100)
+
+  t.is([...agent.freeSockets].length, 0, 'the socket was not pooled')
+
+  agent.destroy()
+
+  await closeServer(server)
+})
+
+// Both were asked for, so arriving together is not the peer saying too much.
+test('a connection is reused after an interim response arrives with the final one', async (t) => {
+  const server = await rawServer(
+    'HTTP/1.1 102 Processing\r\n\r\nHTTP/1.1 200 OK\r\nContent-Length: 1\r\n\r\na'
+  )
+
+  const agent = new http.Agent({ keepAlive: true })
+
+  const client = http.request({ port: server.address().port, agent })
+
+  client.on('error', () => {})
+  client.end()
 
   const response = await waitFor(client, 'response')
 

@@ -99,6 +99,7 @@ interface HTTPOutgoingMessage<
   getHeaders(): Record<string, HTTPHeaderValue>
   hasHeader(name: string): boolean
   setHeader(name: string, value: HTTPHeaderValue): void
+  appendHeader(name: string, value: HTTPHeaderValue): void
   flushHeaders(): void
 
   setTimeout(ms: number, ontimeout?: () => void): this
@@ -165,6 +166,7 @@ interface HTTPServer<M extends HTTPServerEvents = HTTPServerEvents> extends TCPS
   keepAliveTimeout: number
   maxHeaderSize: number
   maxHeadersCount: number
+  maxUpgradeBodySize: number
 
   setTimeout(ms: number, ontimeout?: () => void): this
 
@@ -222,6 +224,10 @@ export interface HTTPServerOptions extends HTTPServerConnectionOptions, TCPServe
   // The most a peer may send before it has said anything that can be acted on.
   maxHeaderSize?: number
   maxHeadersCount?: number
+
+  // The most of an upgrade request's body that may be held until the handover.
+  // Zero disables it.
+  maxUpgradeBodySize?: number
 }
 
 interface HTTPServerConnection {
