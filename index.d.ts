@@ -81,9 +81,7 @@ export type HTTPHeaderValue = string | number | (string | number)[]
 // A set of fields may be given as a bag, as a flat list of alternating names
 // and values, or as a list of pairs.
 export type HTTPHeaders =
-  | Record<string, HTTPHeaderValue>
-  | (string | HTTPHeaderValue)[]
-  | [string, HTTPHeaderValue][]
+  Record<string, HTTPHeaderValue> | (string | HTTPHeaderValue)[] | [string, HTTPHeaderValue][]
 
 export interface HTTPOutgoingMessageEvents extends WritableEvents {
   timeout: []
