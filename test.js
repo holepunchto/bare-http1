@@ -1908,6 +1908,235 @@ test('a reused socket is only ever tracked in one place', async (t) => {
   await closeServer(server)
 })
 
+// An agent that may only hold so many sockets cannot open one for every request
+// at once, so the ones it has no room for wait for one to come free rather than
+// opening more than the caller allowed for.
+test('an agent opens no more sockets at once than it may hold', async (t) => {
+  let open = 0
+  let peak = 0
+
+  const server = await listen(
+    http.createServer((req, res) => {
+      const chunks = []
+
+      req
+        .on('data', (data) => chunks.push(data))
+        .on('end', async () => {
+          await pause(50)
+
+          res.end(Buffer.concat(chunks))
+        })
+    })
+  )
+
+  server.on('connection', (socket) => {
+    peak = Math.max(peak, ++open)
+
+    socket.on('close', () => open--)
+  })
+
+  const agent = new http.Agent({ port: server.address().port, keepAlive: true, maxSockets: 1 })
+
+  const bodies = ['first', 'second', 'third']
+
+  const answered = await Promise.all(
+    bodies.map((body) =>
+      request({ agent, method: 'POST' }, (client) => client.end(body)).then(({ response }) =>
+        Buffer.concat(response.chunks).toString()
+      )
+    )
+  )
+
+  t.is(peak, 1, 'only ever one socket at a time')
+
+  // Written before the agent had a socket to write it onto, so this also says
+  // that a body given to a request that has to wait is not lost.
+  t.alike(answered, bodies, 'and every request was answered in turn')
+
+  agent.destroy()
+
+  await closeServer(server)
+})
+
+test('an agent keeps no more sockets in its pool than it may hold', async (t) => {
+  const server = await listen(http.createServer((req, res) => res.end('ok')))
+
+  const agent = new http.Agent({ port: server.address().port, keepAlive: true, maxFreeSockets: 1 })
+
+  await Promise.all([request({ agent }), request({ agent }), request({ agent })])
+
+  t.is([...agent.sockets].length, 0, 'none left in use')
+  t.is([...agent.freeSockets].length, 1, 'and only the one kept')
+
+  agent.destroy()
+
+  await closeServer(server)
+})
+
+// The total is held across every origin the agent talks to, so the one that
+// gives a socket up has to be able to give it to a request waiting on another.
+// Pooling it instead would leave that request waiting for as long as the pool
+// held on to it, which is to say forever.
+test('an agent holds its total across the origins it talks to', async (t) => {
+  const first = await listen(http.createServer((req, res) => res.end('first')))
+  const second = await listen(http.createServer((req, res) => res.end('second')))
+
+  const agent = new http.Agent({ keepAlive: true, maxTotalSockets: 1 })
+
+  const answered = await within(
+    5000,
+    Promise.all(
+      [first, second].map((server) =>
+        request({ agent, port: server.address().port }).then(({ response }) =>
+          Buffer.concat(response.chunks).toString()
+        )
+      )
+    )
+  )
+
+  t.alike(answered, ['first', 'second'], 'both origins were reached')
+
+  agent.destroy()
+
+  await closeServer(first)
+  await closeServer(second)
+})
+
+test('a request given up on while it waits for a socket is owed nothing', async (t) => {
+  const server = await listen(
+    http.createServer(async (req, res) => {
+      await pause(50)
+
+      res.end('ok')
+    })
+  )
+
+  const agent = new http.Agent({ port: server.address().port, keepAlive: true, maxSockets: 1 })
+
+  const answered = request({ agent })
+
+  const waiting = http.request({ agent })
+
+  t.is(waiting.socket, null, 'the second request has no socket to write onto')
+
+  const closed = waitFor(waiting, 'close')
+
+  waiting.on('error', (err) => t.is(err.code, 'CONNECTION_LOST', 'the waiting request was cut off'))
+
+  waiting.end()
+  waiting.destroy(http.errors.CONNECTION_LOST())
+
+  await closed
+
+  const { response } = await answered
+
+  t.alike(Buffer.concat(response.chunks), Buffer.from('ok'), 'the one that had a socket went on')
+
+  agent.destroy()
+
+  await closeServer(server)
+})
+
+test('a request waiting for a socket is told when the agent is suspended', async (t) => {
+  const server = await listen(
+    http.createServer(async (req, res) => {
+      await pause(50)
+
+      res.end('ok')
+    })
+  )
+
+  const agent = new http.Agent({ port: server.address().port, keepAlive: true, maxSockets: 1 })
+
+  const answered = request({ agent })
+  const waiting = request({ agent })
+
+  await pause(10)
+
+  agent.suspend()
+
+  t.is((await waiting).error.code, 'AGENT_SUSPENDED', 'the waiting request was told')
+  t.ok((await answered).error, 'and the one in flight was cut off with its socket')
+
+  await closeServer(server)
+})
+
+// Nothing else is going to come free on a connection that has gone, so a request
+// waiting behind it has a socket opened for it rather than waiting on one that
+// is never handed back.
+test('a socket lost under a request opens another for the one behind it', async (t) => {
+  const server = await listen(
+    http.createServer((req, res) => {
+      if (req.url === '/lost') return res.socket.destroy()
+
+      res.end('ok')
+    })
+  )
+
+  const agent = new http.Agent({ port: server.address().port, keepAlive: true, maxSockets: 1 })
+
+  const lost = request({ agent, path: '/lost' })
+  const behind = request({ agent, path: '/behind' })
+
+  t.ok((await lost).error, 'the request whose socket went was reported')
+
+  const { response } = await within(5000, behind)
+
+  t.alike(Buffer.concat(response.chunks), Buffer.from('ok'), 'and the one behind it was served')
+
+  agent.destroy()
+
+  await closeServer(server)
+})
+
+// The timeout belongs to the socket, which a request that is waiting has not
+// been handed yet, so it is kept until there is one to set it on.
+test('a timeout set while a request waits for a socket still takes', async (t) => {
+  const server = await listen(
+    http.createServer(async (req, res) => {
+      await pause(150)
+
+      res.end('ok')
+    })
+  )
+
+  const agent = new http.Agent({ port: server.address().port, keepAlive: true, maxSockets: 1 })
+
+  const answered = request({ agent })
+
+  const waiting = http.request({ agent })
+
+  const timedOut = waitFor(waiting, 'timeout')
+
+  waiting.setTimeout(30)
+  waiting.on('error', () => {}).on('response', (res) => res.resume())
+  waiting.end()
+
+  t.ok(
+    await within(
+      5000,
+      timedOut.then(() => true)
+    ),
+    'the timeout reached the socket it waited on'
+  )
+
+  waiting.destroy()
+
+  await answered
+
+  agent.destroy()
+
+  await closeServer(server)
+})
+
+test('an agent holds what Node.js holds by default', (t) => {
+  const agent = new http.Agent()
+
+  t.is(agent.maxSockets, Infinity, 'as many sockets at once as are asked for')
+  t.is(agent.maxFreeSockets, 256, 'and only so many kept in the pool')
+  t.is(agent.maxTotalSockets, Infinity, 'with no total of its own')
+})
+
 test('suspend agent', async (t) => {
   t.plan(6)
 
@@ -3040,6 +3269,64 @@ test('a response that claims an upgrade without naming one is an ordinary respon
   await closeServer(server)
 })
 
+// Only a `101` switches protocols. A peer that names an upgrade alongside any
+// other status is answering the request, and taking the socket away on the
+// strength of the headers alone would let it turn a refused handshake into one
+// the consumer's upgrade handler sees as having been accepted.
+test('a response that names an upgrade without switching is an ordinary response', async (t) => {
+  const sub = t.test()
+  sub.plan(3)
+
+  for (const status of ['200 OK', '204 No Content', '403 Forbidden']) {
+    const server = await rawServer(
+      `HTTP/1.1 ${status}\r\nUpgrade: weird-protocol\r\nConnection: upgrade\r\nContent-Length: 0\r\n\r\n`,
+      { end: true }
+    )
+
+    const req = http.request({ port: server.address().port, agent: false }, (res) => {
+      sub.is(res.statusCode, parseInt(status, 10), `${status} delivered as a response`)
+      res.resume()
+    })
+
+    req.on('upgrade', () => sub.fail('must not be handled as an upgrade'))
+    req.on('error', () => {})
+    req.end()
+
+    await waitFor(req, 'close')
+
+    await closeServer(server)
+  }
+
+  await sub
+})
+
+// An interim response is not the one the request was waiting for, whatever
+// headers it carries, so it must not be able to end the exchange either.
+test('an interim response that names an upgrade is still interim', async (t) => {
+  const sub = t.test()
+  sub.plan(2)
+
+  const server = await rawServer(
+    'HTTP/1.1 103 Early Hints\r\nUpgrade: weird-protocol\r\nConnection: upgrade\r\n\r\n' +
+      'HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nhi',
+    { end: true }
+  )
+
+  const req = http.request({ port: server.address().port, agent: false }, (res) => {
+    sub.is(res.statusCode, 200, 'the real response still arrives')
+    res.resume()
+  })
+
+  req.on('information', (info) => sub.is(info.statusCode, 103, 'reported as interim'))
+  req.on('upgrade', () => sub.fail('must not be handled as an upgrade'))
+  req.on('error', () => {})
+  req.end()
+
+  await sub
+
+  await closeServer(server)
+})
+
 test('a connection reused from the response close handler still reads', async (t) => {
   const sub = t.test()
   sub.plan(1)
@@ -3212,6 +3499,42 @@ test('a CONNECT response is handed over as a tunnel', async (t) => {
   await closeServer(server)
 })
 
+// Whatever a CONNECT is answered with is the answer about the tunnel, and only
+// the caller can decide what a refusal means. Delivering it as an ordinary
+// response instead would leave a caller that is waiting on the handover, as one
+// written against Node.js is, waiting on an event that never comes.
+test('a CONNECT that is refused is handed over with the refusal', async (t) => {
+  const sub = t.test()
+  sub.plan(2)
+
+  const server = await rawServer(
+    'HTTP/1.1 407 Proxy Authentication Required\r\nContent-Length: 6\r\n\r\nnope!\n'
+  )
+
+  const req = http.request({
+    port: server.address().port,
+    method: 'CONNECT',
+    path: 'localhost:443',
+    agent: false
+  })
+
+  req.on('response', () => sub.fail('must not be delivered as a response'))
+
+  req.on('connect', (res, socket, head) => {
+    sub.is(res.statusCode, 407, 'the refusal reaches the caller')
+    sub.alike(head, Buffer.from('nope!\n'), 'along with what came with it')
+
+    socket.destroy()
+  })
+
+  req.on('error', () => {})
+  req.end()
+
+  await sub
+
+  await closeServer(server)
+})
+
 test('a CONNECT request is sent without a body framing', async (t) => {
   const sub = t.test()
   sub.plan(1)
@@ -3348,6 +3671,52 @@ test('a server takes a null options bag', async (t) => {
   )
 
   t.ok(response.endsWith('\r\n\r\nok'), 'the request was served')
+
+  await closeServer(server)
+})
+
+// A peer that is not told how long the connection is worth holding on to has no
+// way of telling a socket that is about to be reclaimed from one that is good
+// for another request, and so races the server for it.
+test('a response says the connection is kept and for how long', async (t) => {
+  const server = await listen(http.createServer((req, res) => res.end('ok')))
+
+  const { port } = server.address()
+
+  const kept = await rawUntil(port, 'GET / HTTP/1.1\r\nHost: localhost\r\n\r\n', 'ok')
+
+  t.ok(kept.includes('Connection: keep-alive\r\n'), 'the connection is kept')
+  t.ok(kept.includes('Keep-Alive: timeout=5\r\n'), 'for as long as the server keeps it')
+
+  server.keepAliveTimeout = 30000
+
+  const longer = await rawUntil(port, 'GET / HTTP/1.1\r\nHost: localhost\r\n\r\n', 'ok')
+
+  t.ok(longer.includes('Keep-Alive: timeout=30\r\n'), 'which is whatever the server holds it')
+
+  const closed = await rawRequest(
+    port,
+    'GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n'
+  )
+
+  t.absent(closed.includes('Keep-Alive'), 'and nothing is said of a connection being given up')
+
+  await closeServer(server)
+})
+
+test('a server that holds connections for no time says nothing of how long', async (t) => {
+  const server = await listen(
+    http.createServer({ keepAliveTimeout: 0 }, (req, res) => res.end('ok'))
+  )
+
+  const response = await rawUntil(
+    server.address().port,
+    'GET / HTTP/1.1\r\nHost: localhost\r\n\r\n',
+    'ok'
+  )
+
+  t.ok(response.includes('Connection: keep-alive\r\n'), 'the connection is still kept')
+  t.absent(response.includes('Keep-Alive'), 'but no deadline is named for it')
 
   await closeServer(server)
 })
@@ -4696,15 +5065,21 @@ test('a request to an IPv6 URL resolves', async (t) => {
 
 // A URL is only where the request starts out. Taking its word over what the
 // caller asked for would quietly undo whatever they did to the path before
-// handing it over, so the options decide, as they do under Node.js.
+// handing it over, so the options decide, as they do under Node.js. The one
+// part that does not work that way is the host, which Node.js resolves from
+// `hostname` first and which a URL always carries.
 test('the options given with a URL take precedence over it', async (t) => {
   const lines = []
 
+  // Bound to the loopback address by name and by number alike, so that which of
+  // the two reaches the server says nothing and only the host header does.
   const server = await listen(
     http.createServer((req, res) => {
       lines.push(`${req.method} ${req.url} ${req.headers.host}`)
       res.end()
-    })
+    }),
+    0,
+    '127.0.0.1'
   )
 
   const { port } = server.address()
@@ -4729,11 +5104,11 @@ test('the options given with a URL take precedence over it', async (t) => {
 
   await send(`http://127.0.0.1:${port}/`, { host: 'localhost', port })
 
-  t.is(lines.shift(), `GET / localhost:${port}`, 'and so does a host')
+  t.is(lines.shift(), `GET / 127.0.0.1:${port}`, 'the hostname the URL carries beats a host')
 
   await send(`http://127.0.0.1:${port}/`, { hostname: 'localhost', port })
 
-  t.is(lines.shift(), `GET / localhost:${port}`, 'named either way round')
+  t.is(lines.shift(), `GET / localhost:${port}`, 'but a hostname given alongside it wins')
 
   await send(`http://localhost:${port}/`, { port: String(port) })
 

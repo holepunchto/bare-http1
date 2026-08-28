@@ -44,15 +44,12 @@ exports.request = function request(url, opts, onresponse) {
     if (given.path === undefined) opts.path = url.pathname + url.search
     if (given.port === undefined) opts.port = url.port ? parseInt(url.port, 10) : defaultPort(url)
 
-    // The host may be named either way round, so it is only taken from the URL
-    // when the caller named it neither way. What the caller did name is put back
+    // The host may be named either way round, and Node.js resolves `hostname`
+    // ahead of `host`. A URL always carries a hostname, so one the caller named
+    // only as `host` does not displace it. What the caller did name is put back
     // in case a URL-like object carried its own into the merge.
     opts.host = given.host
-    opts.hostname = given.hostname
-
-    if (given.host === undefined && given.hostname === undefined) {
-      opts.hostname = hostname(url)
-    }
+    opts.hostname = given.hostname === undefined ? hostname(url) : given.hostname
   } else {
     opts = { ...url }
   }

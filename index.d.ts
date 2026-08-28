@@ -117,6 +117,16 @@ export interface HTTPAgentOptions {
   keepAlive?: boolean | number
   keepAliveMsecs?: number
   defaultPort?: number
+
+  // How many sockets the agent may hold at once for a single origin, and across
+  // every origin it talks to. A request the agent has no room to open one for
+  // waits until one comes free.
+  maxSockets?: number
+  maxTotalSockets?: number
+
+  // And how many it may keep in its pool for a single origin once they are no
+  // longer in use.
+  maxFreeSockets?: number
 }
 
 interface HTTPAgent {
@@ -125,6 +135,11 @@ interface HTTPAgent {
   readonly sockets: IterableIterator<TCPSocket>
   readonly freeSockets: IterableIterator<TCPSocket>
   readonly defaultPort: number
+  readonly keepAlive: boolean
+
+  maxSockets: number
+  maxFreeSockets: number
+  maxTotalSockets: number
 
   createConnection(opts?: TCPSocketOptions & TCPSocketConnectOptions): TCPSocket
   reuseSocket(socket: TCPSocket, req?: HTTPClientRequest): void
@@ -201,8 +216,15 @@ interface HTTPServerResponse extends HTTPOutgoingMessage {
   writeContinue(): void
 }
 
+export interface HTTPServerResponseOptions {
+  // How long the connection the response goes out on is kept once it is done
+  // with, which the peer is told so that it does not send another request into
+  // one that is about to be reclaimed.
+  keepAliveTimeout?: number
+}
+
 declare class HTTPServerResponse extends HTTPOutgoingMessage {
-  constructor(socket: TCPSocket, req: HTTPIncomingMessage)
+  constructor(socket: TCPSocket, req: HTTPIncomingMessage, opts?: HTTPServerResponseOptions)
 }
 
 export { type HTTPServerResponse, HTTPServerResponse as ServerResponse }
