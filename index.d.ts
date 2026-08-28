@@ -244,6 +244,7 @@ export interface HTTPServerOptions extends HTTPServerConnectionOptions, TCPServe
   keepAliveTimeout?: number
 
   // The most a peer may send before it has said anything that can be acted on.
+  // Zero disables them.
   maxHeaderSize?: number
   maxHeadersCount?: number
 
@@ -277,6 +278,10 @@ export interface HTTPClientRequestEvents extends HTTPOutgoingMessageEvents {
 
 export interface HTTPClientRequestOptions extends TCPSocketConnectOptions {
   agent?: HTTPAgent | false
+
+  // Credentials of the form `user:password`, sent as an `Authorization` header.
+  auth?: string
+
   headers?: Record<string, HTTPHeaderValue>
   method?: HTTPMethod
   path?: string

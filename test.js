@@ -5513,6 +5513,247 @@ test('a message that arrived whole says so', async (t) => {
 // A raw server that replies with the given bytes, so that responses the library
 // would not produce itself can be tested. Optionally half-closes its side once
 // it has replied, or drops the connection shortly after.
+// A socket the agent hands over belongs to whatever protocol took it, and may
+// well outlive every request the agent has, so a slot it went on holding would
+// be one no request could ever have back.
+test('a socket handed over to another protocol is let go of by the agent', async (t) => {
+  const handovers = [
+    {
+      event: 'upgrade',
+      reply:
+        'HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n',
+      opts: { path: '/ws', headers: { connection: 'Upgrade', upgrade: 'websocket' } }
+    },
+    {
+      event: 'connect',
+      reply: 'HTTP/1.1 200 Connection Established\r\n\r\n',
+      opts: { method: 'CONNECT', path: 'example.org:443' }
+    }
+  ]
+
+  for (const { event, reply, opts } of handovers) {
+    let connections = 0
+
+    const server = await listen(
+      tcp.createServer((socket) => {
+        const first = ++connections === 1
+
+        socket.on('error', () => {})
+        socket.on('data', () => {
+          socket.write(
+            Buffer.from(first ? reply : 'HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok')
+          )
+        })
+      })
+    )
+
+    const agent = new http.Agent({
+      port: server.address().port,
+      keepAlive: true,
+      maxSockets: 1
+    })
+
+    const req = http.request({ agent, ...opts })
+
+    req.on('error', () => {})
+
+    const handed = new Promise((resolve) => req.on(event, (res, socket) => resolve(socket)))
+
+    req.end()
+
+    const socket = await handed
+
+    t.is([...agent.sockets].length, 0, `the ${event} socket is not one the agent holds`)
+
+    const behind = await within(1000, request({ agent, path: '/next' }))
+
+    t.is(behind && behind.response.statusCode, 200, 'a request behind it is still served')
+    t.is(connections, 2, 'on a socket of its own')
+
+    socket.destroy()
+    agent.destroy()
+
+    await closeServer(server)
+  }
+})
+
+// The consumer of a tunnel may be done writing long before the peer is done
+// sending, so the agent must not take the socket down with its write side.
+test('a tunnel outlives the write side its consumer closes', async (t) => {
+  const peers = []
+
+  const server = await listen(
+    tcp.createServer({ allowHalfOpen: true }, (socket) => {
+      peers.push(socket)
+
+      socket.on('error', () => {})
+      socket.once('data', () =>
+        socket.write(Buffer.from('HTTP/1.1 200 Connection Established\r\n\r\n'))
+      )
+    })
+  )
+
+  const agent = new http.Agent({ keepAlive: true })
+
+  const req = http.request({
+    port: server.address().port,
+    agent,
+    method: 'CONNECT',
+    path: 'example.org:443',
+    allowHalfOpen: true
+  })
+
+  req.on('error', () => {})
+
+  const handed = new Promise((resolve) => req.on('connect', (res, socket) => resolve(socket)))
+
+  req.end()
+
+  const tunnel = await handed
+
+  const received = []
+
+  tunnel.on('error', () => {}).on('data', (data) => received.push(data))
+
+  tunnel.end()
+
+  await pause(100)
+
+  for (const peer of peers) peer.write(Buffer.from('late'))
+
+  await pause(100)
+
+  t.absent(tunnel.destroying, 'the tunnel is still up')
+  t.alike(Buffer.concat(received), Buffer.from('late'), 'and what the peer sent still arrives')
+
+  tunnel.destroy()
+  agent.destroy()
+
+  await closeServer(server)
+})
+
+// A wait that rounds down to nothing would read as an instruction not to reuse
+// the connection, which is not what a wait under a second means.
+test('a keep-alive wait under a second is not announced', async (t) => {
+  const server = await listen(http.createServer((req, res) => res.end('ok')))
+
+  server.keepAliveTimeout = 900
+
+  const raw = await rawUntil(
+    server.address().port,
+    'GET / HTTP/1.1\r\nHost: localhost\r\n\r\n',
+    'ok'
+  )
+
+  t.ok(raw.includes('Connection: keep-alive\r\n'), 'the connection is kept')
+  t.absent(raw.includes('Keep-Alive:'), 'but nothing is said of how long')
+
+  await closeServer(server)
+})
+
+// The methods the constants name are the ones the parser accepts, so anything
+// that reads them to decide what is routable reads the truth.
+test('every method the constants name is one the server serves', async (t) => {
+  const server = await listen(http.createServer((req, res) => res.end('ok')))
+
+  const port = server.address().port
+
+  // A tunnel is handed over rather than answered, so it has nothing to say here.
+  const methods = Object.values(http.constants.method).filter((method) => method !== 'CONNECT')
+
+  const served = []
+
+  for (const method of methods) {
+    const raw = await rawBytes(
+      port,
+      `${method} / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n`
+    )
+
+    if (raw.startsWith('HTTP/1.1 200 OK\r\n')) served.push(method)
+  }
+
+  t.alike(served, methods, 'every method is served')
+  t.alike(http.METHODS, Object.values(http.constants.method), 'and every one of them is exported')
+
+  await closeServer(server)
+})
+
+// RFC 9112 asks that an empty line before the request line be ignored, since a
+// peer that ends a message with a stray CRLF leaves one behind.
+test('an empty line before the request line is ignored', async (t) => {
+  const server = await listen(http.createServer((req, res) => res.end(req.url)))
+
+  const raw = await rawBytes(
+    server.address().port,
+    '\r\n\r\nGET /ok HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n'
+  )
+
+  t.ok(raw.startsWith('HTTP/1.1 200 OK\r\n'), 'the request is served')
+  t.ok(raw.endsWith('/ok'), 'and it is the one the peer sent')
+
+  await closeServer(server)
+})
+
+// Zero turns a limit off, as it does for the timeouts, rather than leaving no
+// room for a message at all.
+test('a header size or count limit of zero is no limit', async (t) => {
+  const server = await listen(
+    http.createServer({ maxHeaderSize: 0, maxHeadersCount: 0 }, (req, res) =>
+      res.end(Object.keys(req.headers).length.toString())
+    )
+  )
+
+  const fields = Array.from({ length: 3000 }, (_, i) => `X-${i}: ${'a'.repeat(32)}\r\n`).join('')
+
+  const raw = await rawBytes(
+    server.address().port,
+    `GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n${fields}\r\n`
+  )
+
+  t.ok(raw.startsWith('HTTP/1.1 200 OK\r\n'), 'a head well past either default is served')
+  t.ok(raw.endsWith('3002'), 'with every field it carried')
+
+  await closeServer(server)
+})
+
+// A peer that is given credentials has to be given them in a form it can read,
+// which is the header rather than the userinfo the URL carried them in.
+test('credentials are sent as an authorization header', async (t) => {
+  const seen = []
+
+  const server = await listen(
+    http.createServer((req, res) => {
+      seen.push(req.headers.authorization)
+
+      res.end('ok')
+    })
+  )
+
+  const port = server.address().port
+
+  await request(`http://user:pass@localhost:${port}/`)
+  await request({ port, auth: 'user:pass' })
+  await request({ port, auth: 'user:pass', headers: { Authorization: 'Bearer token' } })
+  await request(`http://a%40b:p%3Ac@localhost:${port}/`)
+  await request({ port })
+
+  t.alike(
+    seen,
+    [
+      'Basic dXNlcjpwYXNz',
+      'Basic dXNlcjpwYXNz',
+      // What the caller set for itself is left alone.
+      'Bearer token',
+      // The URL carries them percent encoded, but the header does not.
+      `Basic ${Buffer.from('a@b:p:c').toString('base64')}`,
+      undefined
+    ],
+    'the credentials reach the peer'
+  )
+
+  await closeServer(server)
+})
+
 function rawServer(response, opts = {}) {
   const { destroy = false, end = false } = opts
 

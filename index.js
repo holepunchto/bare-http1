@@ -50,6 +50,12 @@ exports.request = function request(url, opts, onresponse) {
     // in case a URL-like object carried its own into the merge.
     opts.host = given.host
     opts.hostname = given.hostname === undefined ? hostname(url) : given.hostname
+
+    // A URL may carry credentials, which the request sends as an
+    // `Authorization` header, as Node.js does.
+    if (opts.auth === undefined && (url.username || url.password)) {
+      opts.auth = `${decodeURIComponent(url.username)}:${decodeURIComponent(url.password)}`
+    }
   } else {
     opts = { ...url }
   }
