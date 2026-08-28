@@ -6091,6 +6091,119 @@ test('a body that is not bytes is reported rather than sent', async (t) => {
   await closeServer(server)
 })
 
+// A peer that opens a connection and then says nothing is one that never
+// finished sending its request, which is what the headers deadline is there to
+// catch, so it is told as much rather than merely hung up on.
+test('a connection that says nothing at all times out', async (t) => {
+  const server = await listen(
+    http.createServer({ headersTimeout: 200 }, (req, res) => {
+      t.fail('request should not be dispatched')
+      res.end()
+    })
+  )
+
+  const raw = await rawBytes(server.address().port, '')
+
+  t.ok(raw.startsWith('HTTP/1.1 408 Request Timeout\r\n'), 'peer told why')
+  t.ok(raw.includes('Connection: close\r\n'), 'connection close announced')
+
+  await closeServer(server)
+})
+
+// The framing a message that carries no body drops is the framing that would
+// leave the peer waiting. One that says the body is empty says something true,
+// so it goes out as the caller wrote it, as Node.js sends it.
+test('a content length of zero is kept on a method that carries no body', async (t) => {
+  const seen = []
+
+  const server = await listen(
+    tcp.createServer((socket) => {
+      socket
+        .on('error', () => {})
+        .on('data', (data) => {
+          seen.push(data.toString())
+
+          socket.write(Buffer.from('HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n'))
+        })
+    })
+  )
+
+  const result = await request({
+    port: server.address().port,
+    agent: false,
+    headers: { 'content-length': '0' }
+  })
+
+  t.absent(result.error)
+  t.is(result.response.statusCode, 200, 'request understood')
+
+  const sent = seen.join('')
+
+  t.ok(sent.includes('Content-Length: 0\r\n'), 'the length it announced was kept')
+  t.absent(sent.includes('Transfer-Encoding'), 'not chunked')
+
+  await closeServer(server)
+})
+
+// The body is held to it like any other announced length, rather than to the
+// nothing a request that dropped its framing may carry.
+test('a body written against a kept content length of zero is refused', async (t) => {
+  t.plan(2)
+
+  const seen = []
+
+  const server = await listen(
+    tcp.createServer((socket) => {
+      socket.on('error', () => {}).on('data', (data) => seen.push(data.toString()))
+    })
+  )
+
+  const client = http.request({
+    port: server.address().port,
+    agent: false,
+    headers: { 'content-length': '0' }
+  })
+
+  client.on('error', (err) => t.is(err.code, 'CONTENT_LENGTH_MISMATCH', 'the body was refused'))
+
+  client.end('body')
+
+  await pause(200)
+
+  t.absent(seen.join('').includes('body'), 'none of it went out')
+
+  await closeServer(server)
+})
+
+// A length that the body which is not being sent could never match is still
+// dropped, as a peer told to read one would read the next request instead.
+test('a content length that no body will match is still dropped', async (t) => {
+  const seen = []
+
+  const server = await listen(
+    tcp.createServer((socket) => {
+      socket
+        .on('error', () => {})
+        .on('data', (data) => {
+          seen.push(data.toString())
+
+          socket.write(Buffer.from('HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n'))
+        })
+    })
+  )
+
+  const result = await request({
+    port: server.address().port,
+    agent: false,
+    headers: { 'content-length': '5' }
+  })
+
+  t.absent(result.error)
+  t.absent(seen.join('').includes('Content-Length'), 'the length it announced was dropped')
+
+  await closeServer(server)
+})
+
 function rawServer(response, opts = {}) {
   const { destroy = false, end = false } = opts
 
