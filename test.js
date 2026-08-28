@@ -1062,7 +1062,11 @@ test('an upgrade body larger than the limit is refused before it is read', async
 
   server.on('upgrade', () => t.fail('the handover must not happen'))
 
-  const response = await rawBytes(
+  const closed = new Promise((resolve) =>
+    server.on('connection', (socket) => socket.on('close', resolve))
+  )
+
+  const peer = rawIdle(
     server.address().port,
     'POST / HTTP/1.1\r\n' +
       'Host: localhost\r\n' +
@@ -1072,8 +1076,15 @@ test('an upgrade body larger than the limit is refused before it is read', async
       '\r\n'
   )
 
-  t.ok(response.startsWith('HTTP/1.1 413 Payload Too Large\r\n'), 'answered 413')
-  t.is(server.connections.size, 0, 'and the connection was taken down')
+  await waitFor(peer.socket, 'end')
+
+  t.ok(peer.response.startsWith('HTTP/1.1 413 Payload Too Large\r\n'), 'answered 413')
+
+  await closed
+
+  t.is(server.connections.size, 0, 'taken down without waiting on the peer')
+
+  peer.socket.destroy()
 
   await closeServer(server)
 })
