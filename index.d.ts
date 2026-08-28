@@ -23,11 +23,15 @@ export {
 
 export type HTTPVersion = '1.0' | '1.1'
 
+// A field as it arrived, which is only ever a list where the field may appear
+// more than once and cannot be folded onto one line.
+export type HTTPIncomingHeaderValue = string | string[]
+
 export interface HTTPInformationalResponse {
   httpVersion: HTTPVersion
   statusCode: HTTPStatusCode
   statusMessage: HTTPStatusMessage
-  headers: Record<string, HTTPHeaderValue>
+  headers: Record<string, HTTPIncomingHeaderValue>
 }
 
 export const METHODS: HTTPMethod[]
@@ -38,7 +42,7 @@ export interface HTTPIncomingMessageEvents extends ReadableEvents {
 }
 
 export interface HTTPIncomingMessageOptions {
-  headers?: Record<string, HTTPHeaderValue>
+  headers?: Record<string, HTTPIncomingHeaderValue>
   httpVersion?: HTTPVersion
   method?: HTTPMethod
   url?: string
@@ -49,9 +53,9 @@ export interface HTTPIncomingMessageOptions {
 interface HTTPIncomingMessage<
   M extends HTTPIncomingMessageEvents = HTTPIncomingMessageEvents
 > extends Readable<M> {
-  readonly socket: TCPSocket
+  readonly socket: TCPSocket | null
   readonly upgrade: boolean
-  headers: Record<string, HTTPHeaderValue>
+  headers: Record<string, HTTPIncomingHeaderValue>
   method: HTTPMethod
   url: string
   statusCode: HTTPStatusCode
@@ -59,8 +63,8 @@ interface HTTPIncomingMessage<
   readonly httpVersion: HTTPVersion
   readonly complete: boolean
 
-  getHeader(name: string): HTTPHeaderValue | undefined
-  getHeaders(): Record<string, HTTPHeaderValue>
+  getHeader(name: string): HTTPIncomingHeaderValue | undefined
+  getHeaders(): Record<string, HTTPIncomingHeaderValue>
   hasHeader(name: string): boolean
 
   setTimeout(ms: number, ontimeout?: () => void): this
@@ -75,8 +79,9 @@ declare class HTTPIncomingMessage<
 export { type HTTPIncomingMessage, HTTPIncomingMessage as IncomingMessage }
 
 // A field whose value is a list may be given as an array, in which case it is
-// sent as one field per element rather than folded onto a single line.
-export type HTTPHeaderValue = string | number | (string | number)[]
+// sent as one field per element rather than folded onto a single line. A value
+// of `null` is sent as the string it coerces to, as Node.js sends it.
+export type HTTPHeaderValue = string | number | null | (string | number | null)[]
 
 // A set of fields may be given as a bag, as a flat list of alternating names
 // and values, or as a list of pairs.
@@ -319,6 +324,10 @@ interface HTTPClientConnection {
   readonly req: HTTPClientRequest | null
   readonly res: HTTPIncomingMessage | null
   readonly idle: boolean
+
+  // How long the peer said it holds the connection open for, in milliseconds,
+  // or -1 when it said nothing.
+  readonly keepAliveTimeout: number
 }
 
 declare class HTTPClientConnection {

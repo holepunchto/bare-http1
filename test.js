@@ -908,12 +908,13 @@ test('an HTTP/1.0 request does not have a pipelined request served behind it', a
 
 test('protocol negotiation', async (t) => {
   const sub = t.test()
-  sub.plan(7)
+  sub.plan(8)
 
   const server = await listen(http.createServer())
 
   server.on('upgrade', (req, socket, head) => {
-    sub.alike(head, Buffer.from('request head'), 'server upgrade')
+    // The request carries no body, so nothing precedes the handover.
+    sub.alike(head, Buffer.alloc(0), 'server upgrade')
 
     req
       .on('end', () => sub.pass('server request ended'))
@@ -921,7 +922,14 @@ test('protocol negotiation', async (t) => {
       .on('data', () => sub.fail('no request body expected'))
       .on('error', () => sub.fail('the request should not fail'))
 
-    socket.end(
+    // Whatever the two ends make of the socket now is theirs rather than HTTP's.
+    socket.on('data', (data) => {
+      sub.alike(data, Buffer.from('client head'), 'server read past the handover')
+
+      socket.end()
+    })
+
+    socket.write(
       'HTTP/1.1 101 Web Socket Protocol Handshake\r\n' +
         'Upgrade: weird-protocol\r\n' +
         'Connection: Upgrade\r\n' +
@@ -935,7 +943,7 @@ test('protocol negotiation', async (t) => {
       port: server.address().port,
       headers: { Connection: 'Upgrade', Upgrade: 'weird-protocol' }
     })
-    .end('request head')
+    .end()
 
   req.on('upgrade', (res, socket, head) => {
     sub.alike(head, Buffer.from('server head'), 'client upgrade')
@@ -948,8 +956,112 @@ test('protocol negotiation', async (t) => {
       .on('data', () => sub.fail('no response body expected'))
       .on('error', () => sub.fail('the response should not fail'))
 
-    socket.end()
+    socket.end('client head')
   })
+
+  await sub
+
+  await closeServer(server)
+})
+
+// An upgrade only takes effect once the request has been received in full, so a
+// body written to one belongs to the request and has to be framed like any
+// other. Unframed it would be read as the request that follows.
+test('an upgrade request frames the body written to it', async (t) => {
+  const served = []
+
+  const server = await listen(
+    http.createServer((req, res) => {
+      const chunks = []
+
+      req
+        .on('data', (data) => chunks.push(data))
+        .on('end', () => {
+          served.push(
+            req.method + ' ' + req.url + ' ' + JSON.stringify(Buffer.concat(chunks).toString())
+          )
+
+          res.end('ok')
+        })
+    })
+  )
+
+  const client = http.request({
+    port: server.address().port,
+    agent: false,
+    method: 'POST',
+    path: '/upload',
+    headers: { connection: 'upgrade', upgrade: 'websocket' }
+  })
+
+  client.on('error', () => {})
+  client.on('response', (res) => res.resume())
+
+  // Body bytes that look like a request of their own. Unframed they would be
+  // read as one.
+  client.end('GET /admin HTTP/1.1\r\nHost: localhost\r\n\r\n')
+
+  await pause(200)
+
+  t.alike(
+    served,
+    ['POST /upload "GET /admin HTTP/1.1\\r\\nHost: localhost\\r\\n\\r\\n"'],
+    'one request reached the server, carrying the whole of the body'
+  )
+
+  await closeServer(server)
+})
+
+test('an upgrade request that carries no body is not framed for one', async (t) => {
+  const seen = []
+
+  const server = await listen(
+    tcp.createServer((socket) => {
+      socket.on('error', () => {}).on('data', (data) => seen.push(data.toString()))
+    })
+  )
+
+  const client = http.request({
+    port: server.address().port,
+    agent: false,
+    headers: { connection: 'upgrade', upgrade: 'websocket' }
+  })
+
+  client.on('error', () => {})
+  client.end()
+
+  await pause(200)
+
+  const request = seen.join('')
+
+  t.absent(request.includes('Content-Length'), 'no content length')
+  t.absent(request.includes('Transfer-Encoding'), 'not chunked')
+
+  await closeServer(server)
+})
+
+test('a tunnel is still handed everything written to it', async (t) => {
+  const sub = t.test()
+  sub.plan(1)
+
+  const server = await listen(http.createServer())
+
+  server.on('connect', (req, socket, head) => {
+    sub.alike(head, Buffer.from('tunnel head'), 'the head reached the tunnel')
+
+    socket.destroy()
+  })
+
+  const client = http.request({
+    port: server.address().port,
+    agent: false,
+    method: 'CONNECT',
+    path: 'localhost:443'
+  })
+
+  client.on('error', () => {})
+  client.on('connect', (res, socket) => socket.destroy())
+  client.end('tunnel head')
 
   await sub
 
@@ -5800,6 +5912,181 @@ test('credentials are sent as an authorization header', async (t) => {
     ],
     'the credentials reach the peer'
   )
+
+  await closeServer(server)
+})
+
+// A request that arrived in full belongs to its consumer, however much of it
+// they have got round to reading, so a connection going away afterwards must
+// not take the body with it: `complete` says the whole of it is there.
+test('a request that arrived whole outlives the connection', async (t) => {
+  const sub = t.test()
+  sub.plan(3)
+
+  const server = await listen(
+    http.createServer((req, res) => {
+      // Answered before the body is read, and the peer asked for the connection
+      // to be closed, so the socket goes away first.
+      res.end('ok')
+
+      setTimeout(() => {
+        const chunks = []
+
+        req
+          .on('data', (data) => chunks.push(data))
+          .on('error', () => sub.fail('the request should not fail'))
+          .on('end', () => {
+            sub.pass('the body ended')
+            sub.is(req.complete, true, 'the message arrived whole')
+            sub.alike(Buffer.concat(chunks), Buffer.from('hello'), 'and all of it is there')
+          })
+      }, 100)
+    })
+  )
+
+  const peer = rawIdle(
+    server.address().port,
+    'POST / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\nContent-Length: 5\r\n\r\nhello'
+  )
+
+  await sub
+
+  peer.socket.destroy()
+
+  await closeServer(server)
+})
+
+test('a pooled socket is given up ahead of the wait the peer announced', async (t) => {
+  const server = await rawServer(
+    'HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: keep-alive\r\nKeep-Alive: timeout=3\r\n\r\n'
+  )
+
+  const agent = new http.Agent({ keepAlive: true, timeout: 30000 })
+
+  const result = await request({ port: server.address().port, agent })
+
+  t.is(result.response.statusCode, 200, 'request answered')
+
+  await pause(100)
+
+  const pooled = [...agent.freeSockets]
+
+  t.is(pooled.length, 1, 'the socket was pooled')
+  t.is(pooled[0].timeout, 2000, 'kept for less time than the peer announced')
+
+  agent.destroy()
+
+  await closeServer(server)
+})
+
+// The peer takes the connection back so soon that a request handed one would be
+// racing it, so there is nothing to be gained by keeping it.
+test('a socket the peer keeps for too little time is not pooled', async (t) => {
+  const server = await rawServer(
+    'HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: keep-alive\r\nKeep-Alive: timeout=1\r\n\r\n'
+  )
+
+  const agent = new http.Agent({ keepAlive: true })
+
+  const result = await request({ port: server.address().port, agent })
+
+  t.is(result.response.statusCode, 200, 'request answered')
+
+  await pause(100)
+
+  t.alike([...agent.freeSockets], [], 'nothing was pooled')
+
+  agent.destroy()
+
+  await closeServer(server)
+})
+
+test('flushed headers on a method that carries no body frame none', async (t) => {
+  const seen = []
+
+  const server = await listen(
+    tcp.createServer((socket) => {
+      socket
+        .on('error', () => {})
+        .on('data', (data) => {
+          seen.push(data.toString())
+
+          socket.write(Buffer.from('HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n'))
+        })
+    })
+  )
+
+  const client = http.request({ port: server.address().port, agent: false })
+
+  client.on('error', () => {})
+  client.on('response', (res) => res.resume())
+
+  client.flushHeaders()
+  client.end()
+
+  await pause(200)
+
+  const sent = seen.join('')
+
+  t.absent(sent.includes('Transfer-Encoding'), 'not chunked')
+  t.absent(sent.includes('Content-Length'), 'no content length')
+
+  await closeServer(server)
+})
+
+// The headers went out saying that nothing follows them, so there is nowhere
+// left to frame a body: one written now would be read as the next request.
+test('a body written after headers that framed none is refused', async (t) => {
+  t.plan(2)
+
+  const seen = []
+
+  const server = await listen(
+    tcp.createServer((socket) => {
+      socket.on('error', () => {}).on('data', (data) => seen.push(data.toString()))
+    })
+  )
+
+  const client = http.request({ port: server.address().port, agent: false })
+
+  client.on('error', (err) => t.is(err.code, 'CONTENT_LENGTH_MISMATCH', 'the body was refused'))
+
+  client.flushHeaders()
+  client.end('body')
+
+  await pause(200)
+
+  t.absent(seen.join('').includes('body'), 'none of it went out')
+
+  await closeServer(server)
+})
+
+test('a body that is not bytes is reported rather than sent', async (t) => {
+  t.plan(3)
+
+  const server = http.createServer((req, res) => {
+    res.on('error', (err) => t.is(err.code, 'INVALID_BODY', 'the body was refused'))
+
+    // Never thrown from underneath the caller, as nothing else that cannot be
+    // sent is either.
+    try {
+      res.end(1234)
+
+      t.pass('end did not throw')
+    } catch {
+      t.fail('end threw')
+    }
+  })
+
+  await listen(server)
+
+  const peer = rawIdle(server.address().port, 'GET / HTTP/1.1\r\nHost: localhost\r\n\r\n')
+
+  await pause(100)
+
+  t.is(peer.response, '', 'nothing went out')
+
+  peer.socket.destroy()
 
   await closeServer(server)
 })
