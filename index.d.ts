@@ -90,7 +90,7 @@ export interface HTTPOutgoingMessageEvents extends WritableEvents {
 interface HTTPOutgoingMessage<
   M extends HTTPOutgoingMessageEvents = HTTPOutgoingMessageEvents
 > extends Writable<M> {
-  readonly socket: TCPSocket
+  readonly socket: TCPSocket | null
   readonly upgrade: boolean
   readonly headersSent: boolean
   headers: Record<string, HTTPHeaderValue>
@@ -144,7 +144,7 @@ interface HTTPAgent {
   createConnection(opts?: TCPSocketOptions & TCPSocketConnectOptions): TCPSocket
   reuseSocket(socket: TCPSocket, req?: HTTPClientRequest): void
   keepSocketAlive(socket: TCPSocket): boolean
-  getName(opts: { host: string; port: number }): string
+  getName(opts: TCPSocketConnectOptions): string
   addRequest(req: HTTPClientRequest, opts: TCPSocketOptions & TCPSocketConnectOptions): void
 
   suspend(): void
@@ -264,7 +264,7 @@ interface HTTPServerConnection {
 declare class HTTPServerConnection {
   constructor(server: HTTPServer, socket: TCPSocket, opts?: HTTPServerConnectionOptions)
 
-  static for(socket: TCPSocket): HTTPServerConnection
+  static for(socket: TCPSocket): HTTPServerConnection | null
 }
 
 export { type HTTPServerConnection, HTTPServerConnection as ServerConnection }
@@ -303,9 +303,9 @@ interface HTTPClientRequest<
 declare class HTTPClientRequest<
   M extends HTTPClientRequestEvents = HTTPClientRequestEvents
 > extends HTTPOutgoingMessage<M> {
-  constructor(opts?: HTTPClientRequestOptions, onresponse?: () => void)
+  constructor(opts?: HTTPClientRequestOptions, onresponse?: (res: HTTPIncomingMessage) => void)
 
-  constructor(onresponse: () => void)
+  constructor(onresponse: (res: HTTPIncomingMessage) => void)
 }
 
 export { type HTTPClientRequest, HTTPClientRequest as ClientRequest }
@@ -346,18 +346,28 @@ export function request(
   onresponse?: (res: HTTPIncomingMessage) => void
 ): HTTPClientRequest
 
-export function get(
-  url: URL | string,
-  opts?: HTTPClientRequestOptions,
-  onresponse?: (res: HTTPIncomingMessage) => void
-): HTTPClientRequest
-
 export function request(
   url: URL | string,
   onresponse: (res: HTTPIncomingMessage) => void
 ): HTTPClientRequest
 
 export function request(
+  opts: HTTPClientRequestOptions,
+  onresponse?: (res: HTTPIncomingMessage) => void
+): HTTPClientRequest
+
+export function get(
+  url: URL | string,
+  opts?: HTTPClientRequestOptions,
+  onresponse?: (res: HTTPIncomingMessage) => void
+): HTTPClientRequest
+
+export function get(
+  url: URL | string,
+  onresponse: (res: HTTPIncomingMessage) => void
+): HTTPClientRequest
+
+export function get(
   opts: HTTPClientRequestOptions,
   onresponse?: (res: HTTPIncomingMessage) => void
 ): HTTPClientRequest

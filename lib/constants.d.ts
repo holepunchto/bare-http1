@@ -105,8 +105,13 @@ declare const constants: {
 
 declare namespace constants {
   export type HTTPMethod = keyof typeof constants.method
-  export type HTTPStatusCode = keyof typeof constants.status
-  export type HTTPStatusMessage = (typeof constants.status)[HTTPStatusCode]
+
+  // Any three digit code may be sent or received, and any field value may stand
+  // in for the reason phrase, so the ones named here are only the ones that have
+  // a phrase of their own rather than the whole of what is allowed.
+  export type HTTPStatusCode = keyof typeof constants.status | (number & {})
+  export type HTTPStatusMessage =
+    (typeof constants.status)[keyof typeof constants.status] | (string & {})
 }
 
 export = constants
