@@ -334,9 +334,11 @@ test('connection lost while the response body is arriving', async (t) => {
       .on('data', (data) => sub.alike(data, Buffer.from('partial'), 'partial body delivered'))
       // A truncated body must not look like a clean end, and it must not leave
       // the consumer waiting for one either.
-      .on('aborted', () => sub.pass('response aborted'))
       .on('error', (err) => sub.is(err.code, 'CONNECTION_LOST', 'response failed'))
-      .on('close', () => sub.pass('response closed'))
+      .on('close', () => {
+        sub.absent(res.complete, 'response stopped short')
+        sub.pass('response closed')
+      })
   })
 
   // The request was sent in full and answered, so it is not the half that
@@ -1474,7 +1476,7 @@ test('custom request headers', async (t) => {
 })
 
 test('client request timeout', async (t) => {
-  t.plan(2)
+  t.plan(3)
 
   const sub = t.test()
   sub.plan(2)
@@ -1489,11 +1491,19 @@ test('client request timeout', async (t) => {
 
   await waitForServer(server)
 
+  const since = Date.now()
+
   const req = http.request({ port: server.address().port }).end()
 
   req.on('timeout', () => sub.pass('timeout')).setTimeout(100, () => sub.pass('callback invoked'))
 
   await sub
+
+  // The deadline that ran has to be the one that was asked for. Settling for
+  // any timeout at all would be met just as well by the agent's own, which is
+  // measured in seconds, and would say nothing about whether the one set here
+  // ever took hold.
+  t.ok(Date.now() - since < 1000, 'the deadline that ran was the one that was set')
 
   server.close(() => t.pass('server closed'))
 })
@@ -1528,13 +1538,25 @@ test('server timeout, no handler', async (t) => {
 
   await waitForServer(server)
 
-  const req = http.request({ port: server.address().port })
+  // A peer that says nothing at all, so that it is the socket timeout that
+  // reclaims the connection rather than any of the request deadlines. Driven
+  // with a bare socket, since what is being tested is what the server does
+  // with a connection nobody is listening for, not what a client makes of it:
+  // going through one would put the agent, its pool and a whole state machine
+  // between the timeout and the only thing that ends the test.
+  const socket = tcp.createConnection(server.address().port, 'localhost')
 
-  req.on('error', (err) => {
-    t.pass(err.message)
-
-    server.close(() => t.pass('server closed'))
+  // Whichever way the connection goes away counts, and a half open socket is
+  // only ever read closed here, as this side never writes and so never ends.
+  await new Promise((resolve) => {
+    socket.on('error', resolve).on('end', resolve).on('close', resolve)
   })
+
+  socket.destroy()
+
+  t.pass('the connection was taken down')
+
+  server.close(() => t.pass('server closed'))
 })
 
 test('server timeout, handler', async (t) => {
@@ -2225,10 +2247,13 @@ test('request truncated by the peer', async (t) => {
   const server = http.createServer((req) => {
     req
       .on('end', () => sub.fail('the body never completed'))
-      // Reported as an abort rather than an error, so that a client dropping a
-      // connection cannot take the server down with it.
-      .on('aborted', () => sub.pass('request aborted'))
-      .on('close', () => sub.pass('request closed'))
+      // Closed without an error, so that a client dropping a connection cannot
+      // take the server down with it, and marked short so that the consumer can
+      // still tell what happened.
+      .on('close', () => {
+        sub.absent(req.complete, 'request stopped short')
+        sub.pass('request closed')
+      })
       .resume()
   })
 
@@ -3267,7 +3292,7 @@ test('request body that never arrives times out', async (t) => {
 
   const server = http
     .createServer({ headersTimeout: 0, requestTimeout: 200 }, (req, res) => {
-      req.on('aborted', () => sub.pass('request aborted'))
+      req.on('close', () => sub.absent(req.complete, 'the request stopped short'))
       req.resume()
     })
     .listen(0)
@@ -3499,14 +3524,14 @@ test('a clientError handler can answer a request that failed mid body', async (t
   t.pass('server closed')
 })
 
-test('an aborted request reports the reason to whoever is listening', async (t) => {
+test('a request cut short reports the reason to whoever is listening', async (t) => {
   t.plan(3)
 
   const sub = t.test()
   sub.plan(2)
 
   const server = http.createServer((req, res) => {
-    req.on('aborted', () => sub.pass('request aborted'))
+    req.on('close', () => sub.absent(req.complete, 'the request stopped short'))
     req.on('error', (err) => sub.is(err.code, 'REQUEST_TIMEOUT', 'reason reported'))
     req.resume()
   })
@@ -3531,7 +3556,7 @@ test('an aborted request reports the reason to whoever is listening', async (t) 
   t.pass('server closed')
 })
 
-test('an aborted request with nobody listening is not an unhandled error', async (t) => {
+test('a request cut short with nobody listening is not an unhandled error', async (t) => {
   t.plan(3)
 
   const sub = t.test()
@@ -3539,7 +3564,9 @@ test('an aborted request with nobody listening is not an unhandled error', async
 
   const server = http.createServer((req, res) => {
     // Deliberately no error listener, which must not take the process down.
-    req.on('aborted', () => sub.pass('request aborted'))
+    // The close is all a consumer gets, and `complete` is what tells it apart
+    // from a request that arrived whole.
+    req.on('close', () => sub.absent(req.complete, 'the request stopped short'))
     req.resume()
   })
 
@@ -5735,6 +5762,415 @@ test('the outgoing headers are handed out as a copy', async (t) => {
   t.absent(raw.includes('X-Injected'), 'nothing was injected')
 
   server.close(() => t.pass('server closed'))
+})
+
+// The status message goes onto the status line, so a value that coerces to
+// something else once it has been checked would put a line of its own there.
+test('a status message is only ever coerced once', async (t) => {
+  t.plan(4)
+
+  let coercions = 0
+
+  // Harmless the first time it is asked and hostile every time after, so a
+  // second coercion anywhere between the check and the wire shows up either as
+  // an injected field or as a count above one.
+  const shifty = {
+    toString() {
+      return ++coercions > 1 ? 'OK\r\nX-Injected: yes' : 'OK'
+    }
+  }
+
+  const server = http
+    .createServer((req, res) => {
+      res.on('error', () => {})
+      res.statusMessage = shifty
+      res.end('ok')
+    })
+    .listen(0)
+
+  server.on('clientError', () => {})
+
+  await waitForServer(server)
+
+  const raw = await rawBytes(server.address().port, 'GET / HTTP/1.1\r\nHost: localhost\r\n\r\n')
+
+  t.absent(raw.includes('X-Injected'), 'nothing was injected')
+  t.ok(raw.startsWith('HTTP/1.1 200 OK\r\n'), 'the status line is the one that was checked')
+  t.is(coercions, 1, 'the value was asked for once')
+
+  await closeServer(server)
+
+  t.pass('server closed')
+})
+
+test('a status message that names nothing falls back to the reason phrase', async (t) => {
+  t.plan(3)
+
+  const server = http
+    .createServer((req, res) => {
+      res.statusMessage = undefined
+
+      t.is(res.statusMessage, null, 'nothing is held onto')
+
+      res.end('ok')
+    })
+    .listen(0)
+
+  await waitForServer(server)
+
+  const raw = await rawUntil(
+    server.address().port,
+    'GET / HTTP/1.1\r\nHost: localhost\r\n\r\n',
+    'ok'
+  )
+
+  t.ok(raw.startsWith('HTTP/1.1 200 OK\r\n'), 'the reason phrase stands in')
+
+  server.close(() => t.pass('server closed'))
+})
+
+// A message that was never given a socket has nowhere to put its body, and
+// finding that out from underneath the stream would take the process down.
+test('a message with no socket reports it rather than throwing', async (t) => {
+  t.plan(2)
+
+  const message = new http.OutgoingMessage()
+
+  message.on('error', (err) => t.is(err.code, 'CONNECTION_LOST', 'the write was reported'))
+
+  message.end('hello')
+
+  await waitFor(message, 'close')
+
+  t.pass('the message closed')
+})
+
+test('a header name that is not a string is refused', (t) => {
+  t.plan(4)
+
+  const res = new http.ServerResponse(null, new http.IncomingMessage())
+
+  t.exception(() => res.setHeader(1, 'x'), /INVALID_HEADER_NAME/)
+  t.exception(() => res.getHeader(1), /INVALID_HEADER_NAME/)
+  t.exception(() => res.hasHeader(null), /INVALID_HEADER_NAME/)
+  t.exception(() => res.setHeader(null, 'x'), /INVALID_HEADER_NAME/)
+})
+
+test('a host that is not a string is refused', (t) => {
+  t.plan(2)
+
+  t.exception(() => http.request({ host: 1234, port: 80 }), /INVALID_HEADER_VALUE/)
+  t.exception(() => new http.ClientRequest({ host: {}, port: 80 }), /INVALID_HEADER_VALUE/)
+})
+
+test('the server timeout is zero until one is set', (t) => {
+  t.plan(2)
+
+  const server = http.createServer()
+
+  t.is(server.timeout, 0, 'no timeout to begin with')
+
+  server.setTimeout(100)
+
+  t.is(server.timeout, 100, 'and the one that was set')
+})
+
+// Zero is how long a socket would be kept, which is no time at all, so it asks
+// for no pooling in the same way that `false` does.
+test('an agent asked to keep sockets for no time does not pool them', async (t) => {
+  t.plan(3)
+
+  const server = http.createServer((req, res) => res.end('ok')).listen(0)
+
+  await waitForServer(server)
+
+  const agent = new http.Agent({ keepAlive: 0 })
+
+  const { response } = await request({ port: server.address().port, agent })
+
+  t.is(response.statusCode, 200)
+
+  await pause(100)
+
+  t.is([...agent.freeSockets].length, 0, 'nothing was pooled')
+
+  agent.destroy()
+
+  server.close(() => t.pass('server closed'))
+})
+
+// An agent that is not going to take the socket back leaves the peer holding a
+// connection that will never carry anything else, and a server that is not told
+// keeps it for as long as its own keep-alive allows.
+test('a request gives up a connection the agent will not reuse', async (t) => {
+  t.plan(3)
+
+  const requests = []
+
+  const server = tcp.createServer((socket) => {
+    socket.on('error', () => {})
+    socket.on('data', (data) => {
+      requests.push(data.toString())
+      socket.write(Buffer.from('HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n'))
+    })
+  })
+
+  server.listen(0)
+
+  await waitForServer(server)
+
+  await new Promise((resolve) => {
+    const req = http.request({ port: server.address().port, agent: false })
+    req.on('error', resolve)
+    req.on('response', (res) => {
+      res.resume()
+      res.on('end', resolve)
+    })
+    req.end()
+  })
+
+  t.ok(requests[0].includes('Connection: close\r\n'), 'the connection was given up')
+
+  requests.length = 0
+
+  // The agent this one goes through keeps its sockets, so there is nothing to
+  // tell the peer.
+  const agent = new http.Agent({ keepAlive: true })
+
+  await new Promise((resolve) => {
+    const req = http.request({ port: server.address().port, agent })
+    req.on('error', resolve)
+    req.on('response', (res) => {
+      res.resume()
+      res.on('end', resolve)
+    })
+    req.end()
+  })
+
+  t.absent(requests[0].includes('Connection: close'), 'and a pooled one was not')
+
+  agent.destroy()
+
+  await closeServer(server)
+
+  t.pass('server closed')
+})
+
+test('a tunnel is not given up by an agent that will not reuse it', async (t) => {
+  t.plan(2)
+
+  const requests = []
+
+  const server = tcp.createServer((socket) => {
+    socket.on('error', () => {})
+    socket.once('data', (data) => {
+      requests.push(data.toString())
+      socket.destroy()
+    })
+  })
+
+  server.listen(0)
+
+  await waitForServer(server)
+
+  await new Promise((resolve) => {
+    const req = http.request({
+      port: server.address().port,
+      method: 'CONNECT',
+      path: 'example.com:443',
+      agent: false
+    })
+
+    req.on('error', resolve)
+    req.on('connect', resolve)
+    req.end()
+  })
+
+  t.absent(requests[0].includes('Connection: close'), 'the tunnel was left alone')
+
+  await closeServer(server)
+
+  t.pass('server closed')
+})
+
+// A deadline belongs to the request that asked for it, so a socket that goes
+// back into the pool must not carry it over to whoever takes it next.
+test('a request timeout does not outlive the request that set it', async (t) => {
+  t.plan(3)
+
+  const server = http
+    .createServer((req, res) => {
+      if (req.url === '/slow') {
+        setTimeout(() => res.end('slow'), 400)
+      } else {
+        res.end('fast')
+      }
+    })
+    .listen(0)
+
+  await waitForServer(server)
+
+  const port = server.address().port
+  const agent = new http.Agent({ keepAlive: true })
+
+  await new Promise((resolve) => {
+    const req = http.request({ port, path: '/fast', agent })
+    req.setTimeout(100)
+    req.on('error', resolve)
+    req.on('response', (res) => {
+      res.resume()
+      res.on('end', resolve)
+    })
+    req.end()
+  })
+
+  await pause(20)
+
+  t.is([...agent.freeSockets].length, 1, 'the socket was pooled')
+
+  let timedOut = false
+
+  await new Promise((resolve) => {
+    const req = http.request({ port, path: '/slow', agent })
+    req.on('timeout', () => {
+      timedOut = true
+    })
+    req.on('error', resolve)
+    req.on('response', (res) => {
+      res.resume()
+      res.on('end', resolve)
+    })
+    req.end()
+  })
+
+  t.absent(timedOut, 'the next request did not inherit it')
+
+  agent.destroy()
+
+  await closeServer(server)
+
+  t.pass('server closed')
+})
+
+// A method is a case sensitive token, so `get` is another method entirely and
+// one nothing here speaks. Serving it anyway is how the same request line comes
+// to mean two things to two hops.
+test('a method that nothing speaks is answered 400', async (t) => {
+  t.plan(3)
+
+  const server = http.createServer((req, res) => res.end('ok')).listen(0)
+
+  await waitForServer(server)
+
+  const refused = await rawBytes(server.address().port, 'get / HTTP/1.1\r\nHost: localhost\r\n\r\n')
+
+  t.ok(refused.startsWith('HTTP/1.1 400 Bad Request'), 'the lowercase method was refused')
+
+  const served = await rawBytes(
+    server.address().port,
+    'GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n'
+  )
+
+  t.ok(served.startsWith('HTTP/1.1 200 OK'), 'and the one that is spoken was served')
+
+  await closeServer(server)
+
+  t.pass('server closed')
+})
+
+// Whether the request or the response is the one that failed cannot be decided
+// by which of them is still in hand: both let go of the connection when they
+// close, and which closes first is up to the peer.
+test('a request that was answered is not failed when its socket goes', async (t) => {
+  t.plan(3)
+
+  const server = http.createServer((req, res) => res.end('response')).listen(0)
+
+  await waitForServer(server)
+
+  const agent = new http.Agent({ keepAlive: true })
+  const failures = []
+
+  const req = http.request({ port: server.address().port, agent })
+
+  req.on('error', (err) => failures.push(err.code))
+
+  req.on('response', (res) => {
+    // The consumer lets go of the response part way through, which takes the
+    // socket down with it. The request was answered, so nothing is owed to it.
+    res.destroy()
+  })
+
+  req.end()
+
+  await waitFor(req, 'close')
+  await pause(50)
+
+  t.alike(failures, [], 'the request was not failed')
+
+  // And a request that was never answered still is.
+  const unanswered = http.request({ port: server.address().port, agent })
+  const err = await new Promise((resolve) => {
+    unanswered.on('error', resolve)
+    unanswered.flushHeaders()
+    unanswered.socket.destroy()
+  })
+
+  t.is(err.code, 'CONNECTION_LOST', 'an unanswered one is reported')
+
+  agent.destroy()
+
+  await closeServer(server)
+
+  t.pass('server closed')
+})
+
+// The other half of what `complete` is for: a message that did arrive whole has
+// to say so, or a consumer cannot tell the two apart at all.
+test('a message that arrived whole says so', async (t) => {
+  t.plan(5)
+
+  let request = null
+
+  const server = http
+    .createServer((req, res) => {
+      req.on('close', () => {
+        request = req.complete
+      })
+
+      req.resume()
+      req.on('end', () => res.end('body'))
+    })
+    .listen(0)
+
+  await waitForServer(server)
+
+  const response = await new Promise((resolve) => {
+    const req = http.request({ port: server.address().port, method: 'POST', agent: false })
+
+    req.on('error', () => resolve(null))
+    req.on('response', (res) => {
+      t.absent(res.complete, 'not complete while the body is still arriving')
+
+      res.resume()
+      res.on('close', () => resolve(res.complete))
+    })
+
+    req.end('hello')
+  })
+
+  t.ok(response, 'the response arrived whole')
+
+  await pause(50)
+
+  t.ok(request, 'and so did the request')
+
+  // And the flag starts out false, so nothing is taken for granted.
+  t.absent(new http.IncomingMessage().complete, 'a message starts out incomplete')
+
+  await closeServer(server)
+
+  t.pass('server closed')
 })
 
 async function halfOpenServer(opts = {}) {

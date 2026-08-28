@@ -4,7 +4,8 @@ import {
   TCPSocketOptions,
   TCPSocketConnectOptions,
   TCPServer,
-  TCPServerEvents
+  TCPServerEvents,
+  TCPServerOptions
 } from 'bare-tcp'
 import Buffer from 'bare-buffer'
 import URL from 'bare-url'
@@ -33,7 +34,6 @@ export const METHODS: HTTPMethod[]
 export const STATUS_CODES: typeof constants.status
 
 export interface HTTPIncomingMessageEvents extends ReadableEvents {
-  aborted: []
   timeout: []
 }
 
@@ -57,6 +57,7 @@ interface HTTPIncomingMessage<
   statusCode: HTTPStatusCode
   statusMessage: HTTPStatusMessage
   readonly httpVersion: HTTPVersion
+  readonly complete: boolean
 
   getHeader(name: string): HTTPHeaderValue | undefined
   getHeaders(): Record<string, HTTPHeaderValue>
@@ -80,7 +81,9 @@ export type HTTPHeaderValue = string | number | (string | number)[]
 // A set of fields may be given as a bag, as a flat list of alternating names
 // and values, or as a list of pairs.
 export type HTTPHeaders =
-  Record<string, HTTPHeaderValue> | (string | HTTPHeaderValue)[] | [string, HTTPHeaderValue][]
+  | Record<string, HTTPHeaderValue>
+  | (string | HTTPHeaderValue)[]
+  | [string, HTTPHeaderValue][]
 
 export interface HTTPOutgoingMessageEvents extends WritableEvents {
   timeout: []
@@ -112,8 +115,9 @@ declare class HTTPOutgoingMessage<
 export { type HTTPOutgoingMessage, HTTPOutgoingMessage as OutgoingMessage }
 
 export interface HTTPAgentOptions {
-  keepAlive?: boolean
+  keepAlive?: boolean | number
   keepAliveMsecs?: number
+  defaultPort?: number
 }
 
 interface HTTPAgent {
@@ -121,6 +125,7 @@ interface HTTPAgent {
   readonly resumed: Promise<void> | null
   readonly sockets: IterableIterator<TCPSocket>
   readonly freeSockets: IterableIterator<TCPSocket>
+  readonly defaultPort: number
 
   createConnection(opts?: TCPSocketOptions & TCPSocketConnectOptions): TCPSocket
   reuseSocket(socket: TCPSocket, req?: HTTPClientRequest): void
@@ -148,6 +153,7 @@ export { type HTTPAgent, HTTPAgent as Agent }
 export interface HTTPServerEvents extends TCPServerEvents {
   request: [req: HTTPIncomingMessage, res: HTTPServerResponse]
   checkContinue: [req: HTTPIncomingMessage, res: HTTPServerResponse]
+  checkExpectation: [req: HTTPIncomingMessage, res: HTTPServerResponse]
   upgrade: [req: HTTPIncomingMessage, socket: TCPSocket, head: Buffer]
   connect: [req: HTTPIncomingMessage, socket: TCPSocket, head: Buffer]
   clientError: [err: HTTPError, socket: TCPSocket]
@@ -155,7 +161,7 @@ export interface HTTPServerEvents extends TCPServerEvents {
 }
 
 interface HTTPServer<M extends HTTPServerEvents = HTTPServerEvents> extends TCPServer<M> {
-  readonly timeout: number | undefined
+  readonly timeout: number
   headersTimeout: number
   requestTimeout: number
   keepAliveTimeout: number
@@ -206,7 +212,7 @@ export interface HTTPServerConnectionOptions {
   ServerResponse?: typeof HTTPServerResponse
 }
 
-export interface HTTPServerOptions extends HTTPServerConnectionOptions {
+export interface HTTPServerOptions extends HTTPServerConnectionOptions, TCPServerOptions {
   // How long a connection may spend sending its request headers, how long the
   // whole request may take, and how long the connection is kept once a request
   // has been answered, before it is given up on. Time spent waiting on this
@@ -248,6 +254,8 @@ export interface HTTPClientRequestOptions extends TCPSocketConnectOptions {
   headers?: Record<string, HTTPHeaderValue>
   method?: HTTPMethod
   path?: string
+  protocol?: string
+  defaultPort?: number
 }
 
 interface HTTPClientRequest<
@@ -256,6 +264,9 @@ interface HTTPClientRequest<
   readonly method: HTTPMethod
   readonly path: string
   readonly headers: Record<string, HTTPHeaderValue>
+
+  // For Node.js compatibility
+  abort(): void
 }
 
 declare class HTTPClientRequest<
