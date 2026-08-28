@@ -3123,6 +3123,56 @@ test('a request cut short with nobody listening is not an unhandled error', asyn
   await closeServer(server)
 })
 
+test('a response cut short with nobody listening is not an unhandled error', async (t) => {
+  const sub = t.test()
+  sub.plan(1)
+
+  // Promises a hundred bytes, sends seven, then goes away.
+  const server = await rawServer('HTTP/1.1 200 OK\r\nContent-Length: 100\r\n\r\npartial', {
+    destroy: true
+  })
+
+  const req = http.request({ port: server.address().port, agent: false }, (res) => {
+    // Deliberately no error listener, which must not take the process down. The
+    // close is all a consumer gets, and `complete` is what tells it apart from a
+    // response that arrived whole.
+    res.on('close', () => sub.absent(res.complete, 'the response stopped short')).resume()
+  })
+
+  req.on('error', () => t.fail('request should not fail'))
+
+  req.end()
+
+  await sub
+
+  t.pass('survived without an error listener')
+
+  await closeServer(server)
+})
+
+test('a response that fails to parse with nobody listening is not an unhandled error', async (t) => {
+  const sub = t.test()
+  sub.plan(1)
+
+  // A chunk length that is no length at all, which only shows up once the
+  // response has already been handed over.
+  const server = await rawServer('HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\nZZ\r\n')
+
+  const req = http.request({ port: server.address().port, agent: false }, (res) => {
+    res.on('close', () => sub.absent(res.complete, 'the response stopped short')).resume()
+  })
+
+  req.on('error', () => {})
+
+  req.end()
+
+  await sub
+
+  t.pass('survived without an error listener')
+
+  await closeServer(server)
+})
+
 // Time spent waiting on this side is not the peer's fault, so a handler that
 // reads a body slowly must not have it taken away.
 test('request that is read slowly does not time out', async (t) => {
