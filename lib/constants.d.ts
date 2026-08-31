@@ -1,14 +1,40 @@
 declare const constants: {
   method: {
+    ACL: 'ACL'
+    BIND: 'BIND'
+    CHECKOUT: 'CHECKOUT'
+    CONNECT: 'CONNECT'
+    COPY: 'COPY'
+    DELETE: 'DELETE'
     GET: 'GET'
     HEAD: 'HEAD'
-    POST: 'POST'
-    PUT: 'PUT'
-    DELETE: 'DELETE'
-    CONNECT: 'CONNECT'
+    LINK: 'LINK'
+    LOCK: 'LOCK'
+    'M-SEARCH': 'M-SEARCH'
+    MERGE: 'MERGE'
+    MKACTIVITY: 'MKACTIVITY'
+    MKCALENDAR: 'MKCALENDAR'
+    MKCOL: 'MKCOL'
+    MOVE: 'MOVE'
+    NOTIFY: 'NOTIFY'
     OPTIONS: 'OPTIONS'
-    TRACE: 'TRACE'
     PATCH: 'PATCH'
+    POST: 'POST'
+    PROPFIND: 'PROPFIND'
+    PROPPATCH: 'PROPPATCH'
+    PURGE: 'PURGE'
+    PUT: 'PUT'
+    QUERY: 'QUERY'
+    REBIND: 'REBIND'
+    REPORT: 'REPORT'
+    SEARCH: 'SEARCH'
+    SOURCE: 'SOURCE'
+    SUBSCRIBE: 'SUBSCRIBE'
+    TRACE: 'TRACE'
+    UNBIND: 'UNBIND'
+    UNLINK: 'UNLINK'
+    UNLOCK: 'UNLOCK'
+    UNSUBSCRIBE: 'UNSUBSCRIBE'
   }
   status: {
     100: 'Continue'
@@ -79,8 +105,13 @@ declare const constants: {
 
 declare namespace constants {
   export type HTTPMethod = keyof typeof constants.method
-  export type HTTPStatusCode = keyof typeof constants.status
-  export type HTTPStatusMessage = (typeof constants.status)[HTTPStatusCode]
+
+  // Any three digit code may be sent or received, and any field value may stand
+  // in for the reason phrase, so the ones named here are only the ones that have
+  // a phrase of their own rather than the whole of what is allowed.
+  export type HTTPStatusCode = keyof typeof constants.status | (number & {})
+  export type HTTPStatusMessage =
+    (typeof constants.status)[keyof typeof constants.status] | (string & {})
 }
 
 export = constants

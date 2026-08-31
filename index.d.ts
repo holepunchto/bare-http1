@@ -4,7 +4,8 @@ import {
   TCPSocketOptions,
   TCPSocketConnectOptions,
   TCPServer,
-  TCPServerEvents
+  TCPServerEvents,
+  TCPServerOptions
 } from 'bare-tcp'
 import Buffer from 'bare-buffer'
 import URL from 'bare-url'
@@ -20,6 +21,19 @@ export {
   HTTPError as errors
 }
 
+export type HTTPVersion = '1.0' | '1.1'
+
+// A field as it arrived, which is only ever a list where the field may appear
+// more than once and cannot be folded onto one line.
+export type HTTPIncomingHeaderValue = string | string[]
+
+export interface HTTPInformationalResponse {
+  httpVersion: HTTPVersion
+  statusCode: HTTPStatusCode
+  statusMessage: HTTPStatusMessage
+  headers: Record<string, HTTPIncomingHeaderValue>
+}
+
 export const METHODS: HTTPMethod[]
 export const STATUS_CODES: typeof constants.status
 
@@ -28,7 +42,8 @@ export interface HTTPIncomingMessageEvents extends ReadableEvents {
 }
 
 export interface HTTPIncomingMessageOptions {
-  headers?: Record<string, string | number>
+  headers?: Record<string, HTTPIncomingHeaderValue>
+  httpVersion?: HTTPVersion
   method?: HTTPMethod
   url?: string
   statusCode?: HTTPStatusCode
@@ -38,17 +53,18 @@ export interface HTTPIncomingMessageOptions {
 interface HTTPIncomingMessage<
   M extends HTTPIncomingMessageEvents = HTTPIncomingMessageEvents
 > extends Readable<M> {
-  readonly socket: TCPSocket
+  readonly socket: TCPSocket | null
   readonly upgrade: boolean
-  headers: Record<string, string | number>
+  headers: Record<string, HTTPIncomingHeaderValue>
   method: HTTPMethod
   url: string
   statusCode: HTTPStatusCode
   statusMessage: HTTPStatusMessage
-  readonly httpVersion: '1.1'
+  readonly httpVersion: HTTPVersion
+  readonly complete: boolean
 
-  getHeader(name: string): string | number | undefined
-  getHeaders(): Record<string, string | number>
+  getHeader(name: string): HTTPIncomingHeaderValue | undefined
+  getHeaders(): Record<string, HTTPIncomingHeaderValue>
   hasHeader(name: string): boolean
 
   setTimeout(ms: number, ontimeout?: () => void): this
@@ -62,6 +78,16 @@ declare class HTTPIncomingMessage<
 
 export { type HTTPIncomingMessage, HTTPIncomingMessage as IncomingMessage }
 
+// A field whose value is a list may be given as an array, in which case it is
+// sent as one field per element rather than folded onto a single line. A value
+// of `null` is sent as the string it coerces to, as Node.js sends it.
+export type HTTPHeaderValue = string | number | null | (string | number | null)[]
+
+// A set of fields may be given as a bag, as a flat list of alternating names
+// and values, or as a list of pairs.
+export type HTTPHeaders =
+  Record<string, HTTPHeaderValue> | (string | HTTPHeaderValue)[] | [string, HTTPHeaderValue][]
+
 export interface HTTPOutgoingMessageEvents extends WritableEvents {
   timeout: []
 }
@@ -69,15 +95,16 @@ export interface HTTPOutgoingMessageEvents extends WritableEvents {
 interface HTTPOutgoingMessage<
   M extends HTTPOutgoingMessageEvents = HTTPOutgoingMessageEvents
 > extends Writable<M> {
-  readonly socket: TCPSocket
+  readonly socket: TCPSocket | null
   readonly upgrade: boolean
   readonly headersSent: boolean
-  headers: Record<string, string | number>
+  headers: Record<string, HTTPHeaderValue>
 
-  getHeader(name: string): string | number | undefined
-  getHeaders(): Record<string, string | number>
+  getHeader(name: string): HTTPHeaderValue | undefined
+  getHeaders(): Record<string, HTTPHeaderValue>
   hasHeader(name: string): boolean
-  setHeader(name: string, value: string | number): void
+  setHeader(name: string, value: HTTPHeaderValue): void
+  appendHeader(name: string, value: HTTPHeaderValue): void
   flushHeaders(): void
 
   setTimeout(ms: number, ontimeout?: () => void): this
@@ -92,8 +119,19 @@ declare class HTTPOutgoingMessage<
 export { type HTTPOutgoingMessage, HTTPOutgoingMessage as OutgoingMessage }
 
 export interface HTTPAgentOptions {
-  keepAlive?: boolean
+  keepAlive?: boolean | number
   keepAliveMsecs?: number
+  defaultPort?: number
+
+  // How many sockets the agent may hold at once for a single origin, and across
+  // every origin it talks to. A request the agent has no room to open one for
+  // waits until one comes free.
+  maxSockets?: number
+  maxTotalSockets?: number
+
+  // And how many it may keep in its pool for a single origin once they are no
+  // longer in use.
+  maxFreeSockets?: number
 }
 
 interface HTTPAgent {
@@ -101,11 +139,17 @@ interface HTTPAgent {
   readonly resumed: Promise<void> | null
   readonly sockets: IterableIterator<TCPSocket>
   readonly freeSockets: IterableIterator<TCPSocket>
+  readonly defaultPort: number
+  readonly keepAlive: boolean
+
+  maxSockets: number
+  maxFreeSockets: number
+  maxTotalSockets: number
 
   createConnection(opts?: TCPSocketOptions & TCPSocketConnectOptions): TCPSocket
   reuseSocket(socket: TCPSocket, req?: HTTPClientRequest): void
   keepSocketAlive(socket: TCPSocket): boolean
-  getName(opts: { host: string; port: number }): string
+  getName(opts: TCPSocketConnectOptions): string
   addRequest(req: HTTPClientRequest, opts: TCPSocketOptions & TCPSocketConnectOptions): void
 
   suspend(): void
@@ -127,19 +171,32 @@ export { type HTTPAgent, HTTPAgent as Agent }
 
 export interface HTTPServerEvents extends TCPServerEvents {
   request: [req: HTTPIncomingMessage, res: HTTPServerResponse]
+  checkContinue: [req: HTTPIncomingMessage, res: HTTPServerResponse]
+  checkExpectation: [req: HTTPIncomingMessage, res: HTTPServerResponse]
   upgrade: [req: HTTPIncomingMessage, socket: TCPSocket, head: Buffer]
+  connect: [req: HTTPIncomingMessage, socket: TCPSocket, head: Buffer]
+  clientError: [err: HTTPError, socket: TCPSocket]
   timeout: [socket: TCPSocket]
 }
 
 interface HTTPServer<M extends HTTPServerEvents = HTTPServerEvents> extends TCPServer<M> {
-  readonly timeout: number | undefined
+  readonly timeout: number
+  headersTimeout: number
+  requestTimeout: number
+  keepAliveTimeout: number
+  maxHeaderSize: number
+  maxHeadersCount: number
+  maxUpgradeBodySize: number
 
   setTimeout(ms: number, ontimeout?: () => void): this
+
+  closeIdleConnections(): void
+  closeAllConnections(): void
 }
 
 declare class HTTPServer<M extends HTTPServerEvents = HTTPServerEvents> extends TCPServer<M> {
   constructor(
-    opts?: HTTPServerConnectionOptions,
+    opts?: HTTPServerOptions,
     onrequest?: (req: HTTPIncomingMessage, res: HTTPServerResponse) => void
   )
 
@@ -156,14 +213,23 @@ interface HTTPServerResponse extends HTTPOutgoingMessage {
   writeHead(
     statusCode: HTTPStatusCode,
     statusMessage?: HTTPStatusMessage,
-    headers?: Record<string, string | number>
-  ): void
+    headers?: HTTPHeaders
+  ): this
 
-  writeHead(statusCode: HTTPStatusCode, headers?: Record<string, string | number>): void
+  writeHead(statusCode: HTTPStatusCode, headers?: HTTPHeaders): this
+
+  writeContinue(): void
+}
+
+export interface HTTPServerResponseOptions {
+  // How long the connection the response goes out on is kept once it is done
+  // with, which the peer is told so that it does not send another request into
+  // one that is about to be reclaimed.
+  keepAliveTimeout?: number
 }
 
 declare class HTTPServerResponse extends HTTPOutgoingMessage {
-  constructor(socket: TCPSocket, req: HTTPIncomingMessage)
+  constructor(socket: TCPSocket, req: HTTPIncomingMessage, opts?: HTTPServerResponseOptions)
 }
 
 export { type HTTPServerResponse, HTTPServerResponse as ServerResponse }
@@ -171,6 +237,25 @@ export { type HTTPServerResponse, HTTPServerResponse as ServerResponse }
 export interface HTTPServerConnectionOptions {
   IncomingMessage?: typeof HTTPIncomingMessage
   ServerResponse?: typeof HTTPServerResponse
+}
+
+export interface HTTPServerOptions extends HTTPServerConnectionOptions, TCPServerOptions {
+  // How long a connection may spend sending its request headers, how long the
+  // whole request may take, and how long the connection is kept once a request
+  // has been answered, before it is given up on. Time spent waiting on this
+  // side does not count towards any of them. Zero disables them.
+  headersTimeout?: number
+  requestTimeout?: number
+  keepAliveTimeout?: number
+
+  // The most a peer may send before it has said anything that can be acted on.
+  // Zero disables them.
+  maxHeaderSize?: number
+  maxHeadersCount?: number
+
+  // The most of an upgrade request's body that may be held until the handover.
+  // Zero disables it.
+  maxUpgradeBodySize?: number
 }
 
 interface HTTPServerConnection {
@@ -184,21 +269,30 @@ interface HTTPServerConnection {
 declare class HTTPServerConnection {
   constructor(server: HTTPServer, socket: TCPSocket, opts?: HTTPServerConnectionOptions)
 
-  static for(socket: TCPSocket): HTTPServerConnection
+  static for(socket: TCPSocket): HTTPServerConnection | null
 }
 
 export { type HTTPServerConnection, HTTPServerConnection as ServerConnection }
 
 export interface HTTPClientRequestEvents extends HTTPOutgoingMessageEvents {
   response: [res: HTTPIncomingMessage]
+  continue: []
+  information: [info: HTTPInformationalResponse]
   upgrade: [res: HTTPIncomingMessage, socket: TCPSocket, head: Buffer]
+  connect: [res: HTTPIncomingMessage, socket: TCPSocket, head: Buffer]
 }
 
 export interface HTTPClientRequestOptions extends TCPSocketConnectOptions {
   agent?: HTTPAgent | false
-  headers?: Record<string, string | number>
+
+  // Credentials of the form `user:password`, sent as an `Authorization` header.
+  auth?: string
+
+  headers?: Record<string, HTTPHeaderValue>
   method?: HTTPMethod
   path?: string
+  protocol?: string
+  defaultPort?: number
 }
 
 interface HTTPClientRequest<
@@ -206,15 +300,18 @@ interface HTTPClientRequest<
 > extends HTTPOutgoingMessage<M> {
   readonly method: HTTPMethod
   readonly path: string
-  readonly headers: Record<string, string | number>
+  readonly headers: Record<string, HTTPHeaderValue>
+
+  // For Node.js compatibility
+  abort(): void
 }
 
 declare class HTTPClientRequest<
   M extends HTTPClientRequestEvents = HTTPClientRequestEvents
 > extends HTTPOutgoingMessage<M> {
-  constructor(opts?: HTTPClientRequestOptions, onresponse?: () => void)
+  constructor(opts?: HTTPClientRequestOptions, onresponse?: (res: HTTPIncomingMessage) => void)
 
-  constructor(onresponse: () => void)
+  constructor(onresponse: (res: HTTPIncomingMessage) => void)
 }
 
 export { type HTTPClientRequest, HTTPClientRequest as ClientRequest }
@@ -228,6 +325,10 @@ interface HTTPClientConnection {
   readonly req: HTTPClientRequest | null
   readonly res: HTTPIncomingMessage | null
   readonly idle: boolean
+
+  // How long the peer said it holds the connection open for, in milliseconds,
+  // or -1 when it said nothing.
+  readonly keepAliveTimeout: number
 }
 
 declare class HTTPClientConnection {
@@ -241,7 +342,7 @@ declare class HTTPClientConnection {
 export { type HTTPClientConnection, HTTPClientConnection as ClientConnection }
 
 export function createServer(
-  opts?: HTTPServerConnectionOptions,
+  opts?: HTTPServerOptions,
   onrequest?: (req: HTTPIncomingMessage, res: HTTPServerResponse) => void
 ): HTTPServer
 
@@ -255,18 +356,28 @@ export function request(
   onresponse?: (res: HTTPIncomingMessage) => void
 ): HTTPClientRequest
 
-export function get(
-  url: URL | string,
-  opts?: HTTPClientRequestOptions,
-  onresponse?: (res: HTTPIncomingMessage) => void
-): HTTPClientRequest
-
 export function request(
   url: URL | string,
   onresponse: (res: HTTPIncomingMessage) => void
 ): HTTPClientRequest
 
 export function request(
+  opts: HTTPClientRequestOptions,
+  onresponse?: (res: HTTPIncomingMessage) => void
+): HTTPClientRequest
+
+export function get(
+  url: URL | string,
+  opts?: HTTPClientRequestOptions,
+  onresponse?: (res: HTTPIncomingMessage) => void
+): HTTPClientRequest
+
+export function get(
+  url: URL | string,
+  onresponse: (res: HTTPIncomingMessage) => void
+): HTTPClientRequest
+
+export function get(
   opts: HTTPClientRequestOptions,
   onresponse?: (res: HTTPIncomingMessage) => void
 ): HTTPClientRequest
