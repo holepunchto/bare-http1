@@ -139,8 +139,9 @@ export { type HTTPIncomingMessage, HTTPIncomingMessage as IncomingMessage }
 
 /**
  * The value of a header to send. A field whose value is a list may be given as an array, in which
- * case it is sent as one field per element rather than folded onto a single line. A value of `null`
- * is sent as the string it coerces to, as Node.js sends it.
+ * case it is sent as one field per element rather than folded onto a single line. `Cookie` is the
+ * exception, whose elements are folded onto a single line separated by `'; '`. A value of `null` is
+ * sent as the string it coerces to, as Node.js sends it.
  */
 export type HTTPHeaderValue = string | number | null | (string | number | null)[]
 
@@ -190,21 +191,28 @@ interface HTTPOutgoingMessage<
   /**
    * Sets header `name` (case-insensitive) to `value`, replacing any value already set and
    * validating both.
-   * @param name - The header name (case-insensitive); must be a valid RFC 7230 token.
-   * @param value - The header value; must not contain line-terminating characters.
+   * @param name - The header name (case-insensitive); must be a valid RFC 9110 token, and must not
+   * be `__proto__`.
+   * @param value - The header value; must not contain a control character other than tab. Every
+   * element of an array value is checked in turn, and `null` is allowed.
    * @throws {HEADERS_SENT} the headers have already been sent.
-   * @throws {INVALID_HEADER_NAME} `name` is not a valid RFC 7230 token.
-   * @throws {INVALID_HEADER_VALUE} `value` contains a line-terminating character.
+   * @throws {INVALID_HEADER_NAME} `name` is not a valid RFC 9110 token, or is `__proto__`.
+   * @throws {INVALID_HEADER_VALUE} `value` is `undefined`, or contains a control character other
+   * than tab.
    */
   setHeader(name: string, value: HTTPHeaderValue): void
   /**
    * Adds `value` to header `name` (case-insensitive), keeping any value already set rather than
-   * replacing it, so that the field is sent once per value.
-   * @param name - The header name (case-insensitive); must be a valid RFC 7230 token.
-   * @param value - The header value; must not contain line-terminating characters.
+   * replacing it, so that the field is sent once per value. `Cookie` is the exception, whose values
+   * are folded onto a single line separated by `'; '`.
+   * @param name - The header name (case-insensitive); must be a valid RFC 9110 token, and must not
+   * be `__proto__`.
+   * @param value - The header value; must not contain a control character other than tab. Every
+   * element of an array value is checked in turn, and `null` is allowed.
    * @throws {HEADERS_SENT} the headers have already been sent.
-   * @throws {INVALID_HEADER_NAME} `name` is not a valid RFC 7230 token.
-   * @throws {INVALID_HEADER_VALUE} `value` contains a line-terminating character.
+   * @throws {INVALID_HEADER_NAME} `name` is not a valid RFC 9110 token, or is `__proto__`.
+   * @throws {INVALID_HEADER_VALUE} `value` is `undefined`, or contains a control character other
+   * than tab.
    */
   appendHeader(name: string, value: HTTPHeaderValue): void
   /**
@@ -612,8 +620,9 @@ export { type HTTPServerConnection, HTTPServerConnection as ServerConnection }
 export interface HTTPClientRequestEvents extends HTTPOutgoingMessageEvents {
   response: [res: HTTPIncomingMessage]
   /**
-   * Emitted when the server answers `Expect: 100-continue` with a `100 Continue`, meaning the body
-   * may be sent.
+   * Emitted on any `100 Continue` received, which for a request that announced
+   * `Expect: 100-continue` means the body may be sent. Emitted ahead of the `'information'` event
+   * the same response also drives.
    */
   continue: []
   /** Emitted for each interim 1xx response received ahead of the final one. */
@@ -680,7 +689,8 @@ declare class HTTPClientRequest<
    * choose the pooling agent, or `false` for a fresh, unpooled one.
    * @param onresponse - Added as a one-time `'response'` listener.
    * @throws {INVALID_HEADER_NAME} `method` or a header name is not a valid token.
-   * @throws {INVALID_HEADER_VALUE} `host`, `path`, or a header value contains an invalid character.
+   * @throws {INVALID_HEADER_VALUE} `host` is not a string, or `path` or a header value contains an
+   * invalid character.
    */
   constructor(opts?: HTTPClientRequestOptions, onresponse?: (res: HTTPIncomingMessage) => void)
 
@@ -763,7 +773,7 @@ export function createServer(
  * credentials are defaults that `opts` may override.
  * @param opts - Request options, merged over the values derived from `url`.
  * @param onresponse - Added as a one-time `'response'` listener.
- * @throws {INVALID_PROTOCOL} the protocol is neither `'http:'` nor `'ws:'`.
+ * @throws {INVALID_PROTOCOL} a protocol is given and is neither `'http:'` nor `'ws:'`.
  */
 export function request(
   url: URL | string,
@@ -787,7 +797,7 @@ export function request(
  * credentials are defaults that `opts` may override.
  * @param opts - Request options, merged over the values derived from `url`.
  * @param onresponse - Added as a one-time `'response'` listener.
- * @throws {INVALID_PROTOCOL} the protocol is neither `'http:'` nor `'ws:'`.
+ * @throws {INVALID_PROTOCOL} a protocol is given and is neither `'http:'` nor `'ws:'`.
  */
 export function get(
   url: URL | string,
