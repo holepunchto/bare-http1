@@ -1412,6 +1412,254 @@ test('interim response is reported separately from the response', async (t) => {
   await closeServer(server)
 })
 
+// A caller that announced an expectation is waiting to be told whether to send
+// its body, which is what `continue` tells it, so nothing is written here until
+// it arrives. An unanswered expectation would deadlock the exchange.
+test('a 100 is reported to the caller waiting on it', async (t) => {
+  const sub = t.test()
+  sub.plan(4)
+
+  const server = await listen(
+    http.createServer((req, res) => {
+      const chunks = []
+
+      req
+        .on('data', (data) => chunks.push(data))
+        .on('end', () => {
+          sub.alike(Buffer.concat(chunks), Buffer.from('hello'), 'body received')
+
+          res.end('done')
+        })
+    })
+  )
+
+  const events = []
+
+  const req = http.request({
+    port: server.address().port,
+    method: 'POST',
+    agent: false,
+    headers: { Expect: '100-continue', 'Content-Length': 5 }
+  })
+
+  // Reported ahead of the event every interim response gets, as Node.js does.
+  req.on('continue', () => {
+    events.push('continue')
+
+    req.end('hello')
+  })
+
+  req.on('information', (info) => events.push(`information:${info.statusCode}`))
+
+  req.on('response', (res) => {
+    const chunks = []
+
+    res
+      .on('data', (data) => chunks.push(data))
+      .on('end', () => {
+        sub.is(res.statusCode, 200, 'answered')
+        sub.alike(Buffer.concat(chunks), Buffer.from('done'), 'response received')
+        sub.alike(events, ['continue', 'information:100'], 'reported in order')
+      })
+  })
+
+  await sub
+
+  await closeServer(server)
+})
+
+// The peer cannot answer headers it has not been sent, so a request that
+// announces an expectation sends them without waiting for the body that is
+// itself waiting on the answer.
+test('a request that announces an expectation sends its headers ahead', async (t) => {
+  const requests = []
+
+  const server = await listen(
+    tcp.createServer((socket) => {
+      socket.on('error', () => {}).on('data', (data) => requests.push(data.toString()))
+    })
+  )
+
+  const req = http.request({
+    port: server.address().port,
+    method: 'POST',
+    agent: false,
+    headers: { Expect: '100-continue', 'Content-Length': 5 }
+  })
+
+  req.on('error', () => {})
+
+  await pause(200)
+
+  t.is(requests.length, 1, 'the headers went out with no body written')
+  t.ok(requests[0].includes('Expect: 100-continue'), 'the expectation was announced')
+  t.ok(requests[0].includes('Content-Length: 5'), 'the body was framed')
+
+  req.destroy()
+
+  await closeServer(server)
+})
+
+// An expectation is an offer of a body, so the headers have to frame one even
+// though none has been written yet: a caller that is told to go ahead has
+// nowhere to put its body otherwise.
+test('a request that announces an expectation but no length is framed chunked', async (t) => {
+  const requests = []
+
+  const server = await listen(
+    tcp.createServer((socket) => {
+      socket.on('error', () => {}).on('data', (data) => requests.push(data.toString()))
+    })
+  )
+
+  // Including the methods that carry no body of their own, which an expectation
+  // is what announces one for.
+  for (const method of ['POST', 'GET']) {
+    const req = http.request({
+      port: server.address().port,
+      method,
+      agent: false,
+      headers: { Expect: '100-continue' }
+    })
+
+    req.on('error', () => {})
+
+    await pause(200)
+
+    t.ok(
+      requests.some(
+        (request) => request.startsWith(method) && request.includes('Transfer-Encoding: chunked')
+      ),
+      `${method} framed chunked`
+    )
+
+    req.destroy()
+  }
+
+  await closeServer(server)
+})
+
+// Only an expectation sends the headers ahead of the body. Any other request
+// frames its body from what was written, which it cannot do once the headers
+// have gone out.
+test('a request that announces nothing sends nothing ahead', async (t) => {
+  const requests = []
+
+  const server = await listen(
+    tcp.createServer((socket) => {
+      socket.on('error', () => {}).on('data', (data) => requests.push(data.toString()))
+    })
+  )
+
+  const req = http.request({ port: server.address().port, method: 'POST', agent: false })
+
+  req.on('error', () => {})
+
+  await pause(200)
+
+  t.is(requests.length, 0, 'nothing was sent ahead of the body')
+
+  req.destroy()
+
+  await closeServer(server)
+})
+
+// The headers only go out once the caller has had the tick it made the request
+// in, so one it sets straight afterwards is still sent, as Node.js allows.
+test('a header set alongside an expectation is still sent', async (t) => {
+  const server = await listen(
+    http.createServer((req, res) => {
+      t.is(req.headers['x-late'], 'included', 'the header went out')
+
+      req.resume().on('end', () => res.end('ok'))
+    })
+  )
+
+  const req = http.request({
+    port: server.address().port,
+    method: 'POST',
+    agent: false,
+    headers: { Expect: '100-continue', 'Content-Length': 2 }
+  })
+
+  req.setHeader('X-Late', 'included')
+
+  req.on('continue', () => req.end('hi'))
+
+  await new Promise((resolve) => req.on('response', (res) => res.resume().on('end', resolve)))
+
+  await closeServer(server)
+})
+
+// A request whose headers cannot be framed has nothing left to report the
+// failure: the caller is waiting on an answer that is never coming.
+test('an expectation whose framing cannot be sent is reported', async (t) => {
+  const server = await listen(http.createServer((req, res) => res.end('ok')))
+
+  const req = http.request({
+    port: server.address().port,
+    method: 'POST',
+    agent: false,
+    headers: { Expect: '100-continue', 'Transfer-Encoding': 'gzip' }
+  })
+
+  const err = await waitFor(req, 'error')
+
+  t.is(err.code, 'INVALID_TRANSFER_ENCODING', 'the framing was refused')
+
+  await closeServer(server)
+})
+
+// A request that had to wait for a socket frames its body from what was written
+// while it waited, which the headers going out ahead of it must not displace.
+test('an expectation on a request that waited for a socket keeps its framing', async (t) => {
+  const bodies = []
+
+  const server = await listen(
+    http.createServer((req, res) => {
+      const chunks = []
+
+      req
+        .on('data', (data) => chunks.push(data))
+        .on('end', () => {
+          bodies.push(`${req.url}:${Buffer.concat(chunks)}`)
+
+          res.end('ok')
+        })
+    })
+  )
+
+  const agent = new http.Agent({ maxSockets: 1 })
+
+  const first = http.request({
+    port: server.address().port,
+    path: '/first',
+    method: 'POST',
+    agent
+  })
+
+  first.on('response', (res) => res.resume())
+  first.end('one')
+
+  const second = http.request({
+    port: server.address().port,
+    path: '/second',
+    method: 'POST',
+    agent,
+    headers: { Expect: '100-continue', 'Content-Length': 3 }
+  })
+
+  second.on('continue', () => second.end('two'))
+
+  await new Promise((resolve) => second.on('response', (res) => res.resume().on('end', resolve)))
+
+  t.alike(bodies, ['/first:one', '/second:two'], 'both bodies arrived whole')
+
+  agent.destroy()
+
+  await closeServer(server)
+})
+
 test('GET request', async (t) => {
   const server = await listen(
     http.createServer((req, res) => {
@@ -4748,6 +4996,130 @@ test('an expectation can be answered by a checkExpectation handler', async (t) =
   const peer = rawIdle(
     server.address().port,
     'POST / HTTP/1.1\r\nHost: localhost\r\nExpect: the-impossible\r\nContent-Length: 0\r\n\r\n'
+  )
+
+  await pause(200)
+
+  t.ok(peer.response.includes('200 OK'), 'answered by the handler')
+
+  await sub
+
+  peer.socket.destroy()
+
+  await closeServer(server)
+})
+
+// The handover waits for the whole request, so a client holding its body back
+// until its expectation is answered has to be answered here: nothing else is
+// going to, and each end would be left waiting on the other.
+test('an upgrade that announces an expectation is answered', async (t) => {
+  const sub = t.test()
+  sub.plan(2)
+
+  const server = http.createServer()
+
+  server.on('upgrade', (req, socket, head) => {
+    const chunks = []
+
+    req
+      .on('data', (data) => chunks.push(data))
+      .on('end', () => {
+        sub.alike(Buffer.concat(chunks), Buffer.from('hello'), 'body received')
+        sub.alike(head, Buffer.from('after'), 'head handed over')
+
+        socket.destroy()
+      })
+  })
+
+  await listen(server)
+
+  const peer = rawIdle(
+    server.address().port,
+    'GET / HTTP/1.1\r\nHost: localhost\r\nUpgrade: foo\r\nConnection: upgrade\r\n' +
+      'Expect: 100-continue\r\nContent-Length: 5\r\n\r\n'
+  )
+
+  await pause(200)
+
+  t.is(peer.response, 'HTTP/1.1 100 Continue\r\n\r\n', 'answered before the body was sent')
+
+  peer.socket.write(Buffer.from('helloafter'))
+
+  await sub
+
+  peer.socket.destroy()
+
+  await closeServer(server)
+})
+
+// A request that announced no body has none being held back, and a 100 for it
+// would only get in the way of the response that hands the connection over.
+test('an upgrade that announces no body gets no interim response', async (t) => {
+  const server = http.createServer()
+
+  server.on('upgrade', (req, socket) =>
+    socket.end('HTTP/1.1 101 Switching Protocols\r\nUpgrade: foo\r\nConnection: upgrade\r\n\r\n')
+  )
+
+  await listen(server)
+
+  const response = await rawBytes(
+    server.address().port,
+    'GET / HTTP/1.1\r\nHost: localhost\r\nUpgrade: foo\r\nConnection: upgrade\r\n' +
+      'Expect: 100-continue\r\n\r\n'
+  )
+
+  t.absent(response.includes('100 Continue'), 'no interim response')
+  t.ok(response.startsWith('HTTP/1.1 101 Switching Protocols'), 'handed over')
+
+  await closeServer(server)
+})
+
+// An expectation this side cannot meet leaves the body it is holding back
+// unreachable, so the connection is not handed over to a protocol whose first
+// bytes would never arrive.
+test('an upgrade that announces an expectation nothing understands is refused', async (t) => {
+  const server = http.createServer(() => t.fail('the request should not be handled'))
+
+  server.on('upgrade', () => t.fail('the connection should not be handed over'))
+
+  await listen(server)
+
+  const peer = rawIdle(
+    server.address().port,
+    'GET / HTTP/1.1\r\nHost: localhost\r\nUpgrade: foo\r\nConnection: upgrade\r\n' +
+      'Expect: the-impossible\r\nContent-Length: 5\r\n\r\n'
+  )
+
+  await pause(200)
+
+  t.ok(peer.response.includes('417 Expectation Failed'), 'answered 417')
+
+  peer.socket.destroy()
+
+  await closeServer(server)
+})
+
+test('an upgrade expectation can be answered by a checkExpectation handler', async (t) => {
+  const sub = t.test()
+  sub.plan(1)
+
+  const server = http.createServer(() => t.fail('the request should not be handled'))
+
+  server.on('upgrade', () => t.fail('the connection should not be handed over'))
+
+  server.on('checkExpectation', (req, res) => {
+    sub.is(req.headers.expect, 'the-impossible', 'the expectation is readable')
+
+    res.end('handled')
+  })
+
+  await listen(server)
+
+  const peer = rawIdle(
+    server.address().port,
+    'GET / HTTP/1.1\r\nHost: localhost\r\nUpgrade: foo\r\nConnection: upgrade\r\n' +
+      'Expect: the-impossible\r\nContent-Length: 5\r\n\r\n'
   )
 
   await pause(200)

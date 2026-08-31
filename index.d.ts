@@ -276,6 +276,7 @@ export { type HTTPServerConnection, HTTPServerConnection as ServerConnection }
 
 export interface HTTPClientRequestEvents extends HTTPOutgoingMessageEvents {
   response: [res: HTTPIncomingMessage]
+  continue: []
   information: [info: HTTPInformationalResponse]
   upgrade: [res: HTTPIncomingMessage, socket: TCPSocket, head: Buffer]
   connect: [res: HTTPIncomingMessage, socket: TCPSocket, head: Buffer]
