@@ -1,6 +1,6 @@
 {
   "name": "bare-http1",
-  "version": "4.5.9",
+  "version": "4.6.0",
   "description": "Native HTTP/1 library for JavaScript",
   "exports": {
     "./package": "./package.json",
