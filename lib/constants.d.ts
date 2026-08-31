@@ -1,3 +1,7 @@
+/**
+ * The `method` map of supported HTTP method names and the `status` map of status codes to their
+ * reason phrases.
+ */
 declare const constants: {
   method: {
     ACL: 'ACL'
@@ -104,12 +108,21 @@ declare const constants: {
 }
 
 declare namespace constants {
+  /** A key of `constants.method`, that is one of the supported HTTP method names. */
   export type HTTPMethod = keyof typeof constants.method
 
-  // Any three digit code may be sent or received, and any field value may stand
-  // in for the reason phrase, so the ones named here are only the ones that have
-  // a phrase of their own rather than the whole of what is allowed.
+  /**
+   * An HTTP status code. Any three digit code may be sent or received, so the codes named in
+   * `constants.status` are only the ones that have a reason phrase of their own rather than the
+   * whole of what is allowed.
+   */
   export type HTTPStatusCode = keyof typeof constants.status | (number & {})
+
+  /**
+   * An HTTP reason phrase. Any field value may stand in for the reason phrase, so the phrases in
+   * `constants.status` are only the ones a code is given by default rather than the whole of what
+   * is allowed.
+   */
   export type HTTPStatusMessage =
     (typeof constants.status)[keyof typeof constants.status] | (string & {})
 }
