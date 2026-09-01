@@ -6576,6 +6576,310 @@ test('a content length that no body will match is still dropped', async (t) => {
   await closeServer(server)
 })
 
+// The socket was pooled under a deadline the peer named, which has nothing to
+// say about a request that is using it: one handed such a socket would be cut
+// short by however little time the peer keeps a connection it is not using.
+test('a pooled socket does not carry its idle deadline into the next request', async (t) => {
+  const server = await keepAliveServer('timeout=3')
+
+  const { port } = server.address()
+
+  const agent = new http.Agent({ keepAlive: true })
+
+  const result = await request({ port, agent })
+
+  t.is(result.response.statusCode, 200, 'first request answered')
+
+  await pause(100)
+
+  const pooled = [...agent.freeSockets]
+
+  t.is(pooled.length, 1, 'the socket was pooled')
+  t.is(pooled[0].timeout, 2000, 'under the wait the peer named')
+
+  const req = http.request({ port, agent })
+
+  req.on('error', () => {})
+  req.end()
+
+  t.is([...agent.sockets][0].timeout, undefined, 'and taken back out from under it')
+
+  await pause(100)
+
+  agent.destroy()
+
+  await closeServer(server)
+})
+
+// The peer only ever named how long it holds an idle connection. What a request
+// that is using one is held to is the wait the agent was given.
+test('an agent that named a wait keeps it on a socket it reuses', async (t) => {
+  const server = await keepAliveServer('timeout=3')
+
+  const { port } = server.address()
+
+  const agent = new http.Agent({ keepAlive: true, timeout: 30000 })
+
+  const result = await request({ port, agent })
+
+  t.is(result.response.statusCode, 200, 'first request answered')
+
+  await pause(100)
+
+  t.is([...agent.freeSockets][0].timeout, 2000, 'pooled under the wait the peer named')
+
+  const req = http.request({ port, agent })
+
+  req.on('error', () => {})
+  req.end()
+
+  t.is([...agent.sockets][0].timeout, 30000, 'and used under the one the agent named')
+
+  await pause(100)
+
+  agent.destroy()
+
+  await closeServer(server)
+})
+
+// A peer that asked for the connection to be closed gets it closed, so a field
+// the caller set that says otherwise only leaves the peer holding a connection
+// that is already gone, and sending its next request into it.
+test('a response that gives the connection up says so', async (t) => {
+  const server = await listen(
+    http.createServer((req, res) => {
+      res.setHeader('Connection', 'keep-alive')
+      res.end('ok')
+    })
+  )
+
+  const response = await rawRequest(
+    server.address().port,
+    'GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n'
+  )
+
+  t.ok(response.includes('Connection: close\r\n'), 'the connection is given up')
+  t.absent(/keep-alive/i.test(response), 'and not claimed to be kept')
+
+  await closeServer(server)
+})
+
+// The body of an HTTP/1.0 response of unknown length is delimited by the close
+// and nothing else, so a peer that is told the connection is kept has nothing
+// to tell it where the body ends.
+test('a body delimited by the close is not announced as a kept connection', async (t) => {
+  const server = await listen(
+    http.createServer((req, res) => {
+      res.setHeader('Connection', 'keep-alive')
+      res.write('a')
+      res.end('b')
+    })
+  )
+
+  const response = await rawRequest(
+    server.address().port,
+    'GET / HTTP/1.0\r\nHost: localhost\r\nConnection: keep-alive\r\n\r\n'
+  )
+
+  t.ok(response.includes('Connection: close\r\n'), 'the connection is given up')
+  t.absent(/keep-alive/i.test(response), 'and not claimed to be kept')
+  t.ok(response.endsWith('\r\n\r\nab'), 'leaving the close to delimit the body')
+
+  await closeServer(server)
+})
+
+// Only a field that contradicts the connection being given up is taken over.
+// One that gives it up already is the caller's to spell, alongside whatever
+// other tokens it names.
+test('a connection the caller gave up itself is left as it named it', async (t) => {
+  const server = await listen(
+    http.createServer((req, res) => {
+      res.setHeader('Connection', 'close, x-thing')
+      res.end('ok')
+    })
+  )
+
+  const response = await rawRequest(
+    server.address().port,
+    'GET / HTTP/1.1\r\nHost: localhost\r\n\r\n'
+  )
+
+  t.ok(response.includes('Connection: close, x-thing\r\n'), 'the field was left alone')
+
+  await closeServer(server)
+})
+
+// A field whose value is a list may be given as an array, and a length given as
+// a list of one names one length like any other spelling of it.
+test('a content length given as a list of one is the length it names', async (t) => {
+  const server = await listen(
+    http.createServer((req, res) => {
+      res.setHeader('Content-Length', ['5'])
+      res.end('hello')
+    })
+  )
+
+  // Read to the close rather than to a marker, so that a length the message
+  // could not be framed against reads as a response that never came rather than
+  // as a run that hangs.
+  const response = await rawBytes(
+    server.address().port,
+    'GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n'
+  )
+
+  t.ok(response.includes('Content-Length: 5\r\n'), 'the length it named was sent')
+  t.ok(response.endsWith('\r\n\r\nhello'), 'along with the body it frames')
+
+  await closeServer(server)
+})
+
+// Anything longer is a `Content-Length` sent more than once, which is what a
+// peer reading a different message out of the same bytes depends on.
+test('a content length given as a longer list is refused', async (t) => {
+  t.plan(2)
+
+  const server = await listen(
+    http.createServer((req, res) => {
+      res.on('error', (err) => t.is(err.code, 'INVALID_CONTENT_LENGTH', 'the length was refused'))
+
+      res.setHeader('Content-Length', ['5', '5'])
+      res.end('hello')
+    })
+  )
+
+  const response = await rawBytes(
+    server.address().port,
+    'GET / HTTP/1.1\r\nHost: localhost\r\n\r\n'
+  )
+
+  t.is(response, '', 'and nothing went out')
+
+  await closeServer(server)
+})
+
+// The same on the way out, where a length of no length is what keeps a method
+// that carries no body from having its framing dropped altogether.
+test('a content length given as a list of one is kept on the way out', async (t) => {
+  const seen = []
+
+  const server = await listen(
+    tcp.createServer((socket) => {
+      socket
+        .on('error', () => {})
+        .on('data', (data) => {
+          seen.push(data.toString())
+
+          socket.write(Buffer.from('HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n'))
+        })
+    })
+  )
+
+  const result = await request({
+    port: server.address().port,
+    agent: false,
+    headers: { 'content-length': ['0'] }
+  })
+
+  t.absent(result.error)
+
+  const sent = seen.join('')
+
+  t.ok(sent.includes('Content-Length: 0\r\n'), 'the length it announced was kept')
+  t.absent(sent.includes('Transfer-Encoding'), 'not chunked')
+
+  await closeServer(server)
+})
+
+// The request target of a CONNECT is the authority of the tunnel it asks for,
+// and RFC 9110 has `Host` name that same authority. Naming the connection
+// instead tells the proxy about itself rather than about where the tunnel goes.
+test('a CONNECT names the tunnel it asks for as its host', async (t) => {
+  const sub = t.test()
+  sub.plan(2)
+
+  const server = await listen(
+    tcp.createServer((socket) => {
+      socket.on('error', () => {})
+
+      socket.once('data', (data) => {
+        const request = data.toString()
+
+        sub.ok(
+          request.startsWith('CONNECT example.org:443 HTTP/1.1\r\n'),
+          'the tunnel is asked for'
+        )
+        sub.ok(request.includes('Host: example.org:443\r\n'), 'and named as the host')
+
+        socket.destroy()
+      })
+    })
+  )
+
+  const req = http.request({
+    port: server.address().port,
+    method: 'CONNECT',
+    path: 'example.org:443',
+    agent: false
+  })
+
+  req.on('error', () => {})
+  req.end()
+
+  await sub
+
+  await closeServer(server)
+})
+
+// A caller that asked for no tunnel named no authority to mirror, so the one the
+// socket is opened to stands in. One the caller named for itself always wins.
+test('a CONNECT that names no tunnel falls back to the connection', async (t) => {
+  const seen = []
+
+  const server = await listen(
+    tcp.createServer((socket) => {
+      socket
+        .on('error', () => {})
+        .once('data', (data) => {
+          seen.push(data.toString())
+
+          socket.destroy()
+        })
+    })
+  )
+
+  const { port } = server.address()
+
+  const requests = [{}, { path: 'example.org:443', headers: { host: 'named.example' } }]
+
+  for (const opts of requests) {
+    const req = http.request({ port, method: 'CONNECT', agent: false, ...opts })
+
+    req.on('error', () => {})
+    req.end()
+
+    await pause(100)
+  }
+
+  t.ok(seen[0].includes(`Host: localhost:${port}\r\n`), 'the connection stands in')
+  t.ok(seen[1].includes('Host: named.example\r\n'), 'and a host the caller named wins')
+
+  await closeServer(server)
+})
+
+// Answers every request on the connection, rather than only the first, so that
+// what a socket the agent pooled and handed out again does can be asserted on.
+function keepAliveServer(keepAlive) {
+  const response = Buffer.from(
+    `HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: keep-alive\r\nKeep-Alive: ${keepAlive}\r\n\r\n`
+  )
+
+  return listen(
+    tcp.createServer((socket) => {
+      socket.on('error', () => {}).on('data', () => socket.write(response))
+    })
+  )
+}
+
 function rawServer(response, opts = {}) {
   const { destroy = false, end = false } = opts
 
@@ -6608,7 +6912,8 @@ function rawRequest(port, request, opts = {}) {
     let sent = false
 
     socket
-      .on('error', reject)
+      .on('error', (err) => reject(failed(chunks, 'the connection failed with ' + err.code)))
+      .on('close', () => reject(failed(chunks, 'the connection went away unclosed')))
       .on('data', (data) => {
         chunks.push(data)
 
@@ -6677,20 +6982,30 @@ function rawUntil(port, request, marker) {
 
     const chunks = []
 
-    socket.on('error', reject).on('data', (data) => {
-      chunks.push(data)
+    socket
+      .on('error', (err) => reject(failed(chunks, 'the connection failed with ' + err.code)))
+      .on('close', () => reject(failed(chunks, 'the connection went away before ' + marker)))
+      .on('end', () => reject(failed(chunks, 'the peer stopped sending before ' + marker)))
+      .on('data', (data) => {
+        chunks.push(data)
 
-      const response = Buffer.concat(chunks).toString()
+        const response = Buffer.concat(chunks).toString()
 
-      if (response.includes(marker)) {
-        socket.destroy()
+        if (response.includes(marker)) {
+          socket.destroy()
 
-        resolve(response)
-      }
-    })
+          resolve(response)
+        }
+      })
 
     socket.write(Buffer.from(request))
   })
+}
+
+// A connection that goes away mid-exchange says nothing about which of the bytes
+// the test was waiting on it did send.
+function failed(chunks, reason) {
+  return new Error(reason + ', having read ' + JSON.stringify(Buffer.concat(chunks).toString()))
 }
 
 // Announces a body of the given size and writes it a chunk at a time, yielding
