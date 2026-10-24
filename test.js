@@ -2239,10 +2239,12 @@ test('a reused socket is only ever tracked in one place', async (t) => {
 
   for (let i = 0; i < 3; i++) {
     const responded = new Promise((resolve) => {
-      const req = http.request({ agent }, (res) => res.on('close', resolve).resume())
+      const req = http.request({ agent }, (res) => {
+        if (socket === null) socket = req.socket
+        else t.is(req.socket, socket, 'socket reused')
 
-      if (socket === null) socket = req.socket
-      else t.is(req.socket, socket, 'socket reused')
+        res.on('close', resolve).resume()
+      })
 
       t.is([...agent.sockets].length, 1, 'in use while the exchange is on')
       t.is([...agent.freeSockets].length, 0, 'and not in the pool as well')
@@ -5330,6 +5332,86 @@ test('a connection the peer said too much on is not reused', async (t) => {
   await pause(100)
 
   t.is([...agent.freeSockets].length, 0, 'the socket was not pooled')
+
+  agent.destroy()
+
+  await closeServer(server)
+})
+
+test('a response that arrived on an idle socket is not taken for the next', async (t) => {
+  let peer = null
+
+  const server = await listen(
+    tcp.createServer((socket) => {
+      peer = socket
+
+      socket.on('error', () => {})
+      socket.on('data', () => socket.write('HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok'))
+    })
+  )
+
+  const agent = new http.Agent({ port: server.address().port, keepAlive: true })
+
+  const first = await body(agent)
+
+  t.is(first, 'ok')
+
+  await pause(10)
+
+  // The write reaches the kernel at once, but the client only reads it on the
+  // next poll. The next request takes the pooled socket before that.
+  peer.write('HTTP/1.1 200 OK\r\nContent-Length: 8\r\n\r\ninjected')
+
+  const second = await body(agent)
+
+  t.is(second, 'ok', 'the second request was answered by the server')
+
+  agent.destroy()
+
+  await closeServer(server)
+
+  async function body(agent) {
+    const req = http.request({ agent })
+
+    req.on('error', () => {})
+    req.end()
+
+    const res = await waitFor(req, 'response')
+
+    let data = ''
+    res.on('data', (chunk) => (data += chunk))
+
+    await waitFor(res, 'end')
+
+    return data
+  }
+})
+
+test('a request given up on while its socket is reserved returns the socket', async (t) => {
+  const server = await rawServer('HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok')
+
+  const agent = new http.Agent({ port: server.address().port, keepAlive: true })
+
+  const first = http.request({ agent })
+
+  first.on('error', () => {})
+  first.end()
+
+  const response = await waitFor(first, 'response')
+
+  response.resume()
+
+  await waitFor(response, 'end')
+  await pause(10)
+
+  const second = http.request({ agent })
+
+  second.on('error', () => {})
+  second.destroy()
+
+  await pause(10)
+
+  t.is([...agent.freeSockets].length, 1, 'the socket went back into the pool')
 
   agent.destroy()
 
